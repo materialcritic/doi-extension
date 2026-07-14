@@ -328,10 +328,6 @@ function buildSearchQuery(title, authors) {
   return query.trim();
 }
 
-// Splits a free-text "Given Family" string the way Crossref's author
-// records do, so results can be matched against the family/given fields
-// Crossref returns rather than trusting its full-text author-query ranking
-// alone (that alone pulled in false positives during testing).
 // Crossref abstracts come back as JATS XML (e.g. "<jats:p>...</jats:p>") —
 // strip tags and collapse whitespace down to plain text for display.
 function stripJatsAbstract(xml) {
@@ -377,6 +373,10 @@ function decodeHtmlEntities(str) {
     .replace(/&#x([0-9a-fA-F]+);/gi, (_, hex) => String.fromCharCode(parseInt(hex, 16)));
 }
 
+// Splits a free-text "Given Family" string the way Crossref's author
+// records do, so results can be matched against the family/given fields
+// Crossref returns rather than trusting its full-text author-query ranking
+// alone (that alone pulled in false positives during testing).
 function parseAuthorName(fullName) {
   const parts = (fullName || "").trim().split(/\s+/).filter(Boolean);
   const family = (parts.length > 1 ? parts[parts.length - 1] : parts[0] || "").toLowerCase();
@@ -599,7 +599,7 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     const orcid = request.orcid || "";
 
     // Same retry-once-on-429-after-2s pattern used for the Semantic Scholar
-    // calls above (getCitedBy/getRelatedPapers) — applied here to every
+    // calls below (getCitedBy/getRelatedPapers) — applied here to every
     // remote call this handler makes (ORCID, Gravatar), not just S2.
     const fetchWithRetry = (url, options, isRetry) =>
       fetch(url, options).then((r) => {
@@ -1176,7 +1176,7 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
 
   if (request.action === "getRelatedPapers") {
     // "Related by citation" rather than keyword-similarity (search.html's
-    // Find Similar, item 39) — uses Semantic Scholar's Recommendations API,
+    // Find Similar) — uses Semantic Scholar's Recommendations API,
     // which is built on their own citation graph (effectively co-citation:
     // papers that tend to get cited alongside this one), instead of
     // reimplementing that analysis client-side by walking references/
@@ -1346,6 +1346,24 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     chrome.storage.local.get({ potdHistory: [] }, ({ potdHistory }) => {
       sendResponse({ success: true, history: potdHistory });
     });
+    return true;
+  }
+
+  if (request.action === "getDefaultOutputDir") {
+    const port = chrome.runtime.connectNative(NATIVE_HOST);
+
+    port.onMessage.addListener((message) => {
+      if (message.type === "progress") return;
+      sendResponse({ success: message.status === "ok", path: message.path, error: message.detail });
+      port.disconnect();
+    });
+
+    port.onDisconnect.addListener(() => {
+      const err = chrome.runtime.lastError;
+      if (err) sendResponse({ success: false, error: err.message });
+    });
+
+    port.postMessage({ action: "default_output_dir" });
     return true;
   }
 
@@ -1558,8 +1576,11 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
 
       port.onMessage.addListener((message) => {
         if (message.type === "progress") {
-          // Forward live progress lines to any open popup
-          chrome.runtime.sendMessage({ action: "progress", line: message.line });
+          // Forward live progress lines to any open popup. No popup being
+          // open is the common case (most downloads run in the background),
+          // so read lastError in the callback to swallow the resulting
+          // harmless "receiving end does not exist" rather than logging it.
+          chrome.runtime.sendMessage({ action: "progress", line: message.line }, () => void chrome.runtime.lastError);
           return;
         }
 

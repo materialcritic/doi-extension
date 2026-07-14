@@ -45,7 +45,11 @@ $ManifestObject = [ordered]@{
     type             = "stdio"
     allowed_origins  = @("chrome-extension://$ExtId/")
 }
-$ManifestObject | ConvertTo-Json | Set-Content -Path $ManifestDest -Encoding UTF8
+# Set-Content -Encoding UTF8 prepends a BOM on Windows PowerShell 5.1 (the
+# default on Windows), which Chrome's native-messaging manifest reader can
+# reject outright. WriteAllText with a BOM-less UTF8Encoding avoids that.
+$ManifestJson = $ManifestObject | ConvertTo-Json
+[System.IO.File]::WriteAllText($ManifestDest, $ManifestJson, (New-Object System.Text.UTF8Encoding($false)))
 
 # Windows registers Native Messaging hosts via the registry instead of a
 # fixed folder (which is how macOS/Linux do it) — the registry value just

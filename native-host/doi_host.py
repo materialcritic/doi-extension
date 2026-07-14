@@ -13,6 +13,7 @@ import sys
 import json
 import struct
 import subprocess
+import threading
 import time
 from datetime import datetime, timedelta
 
@@ -193,6 +194,16 @@ def main():
             json.dump(health, f, indent=2)
 
         send_message({"type": "result", "status": "ok"})
+        return
+
+    if message.get("action") == "default_output_dir":
+        # The extension pages can't know the user's home dir; they ask here so
+        # the "leave output folder blank" default resolves to a real path
+        # instead of a hardcoded one. Kept in sync with scihub_download.py's
+        # own argparse default (Path.home() / 'Downloads' / 'autorename') —
+        # if you change one, change both.
+        default_dir = os.path.join(os.path.expanduser("~"), "Downloads", "autorename")
+        send_message({"type": "result", "status": "ok", "path": default_dir})
         return
 
     if message.get("action") == "export_data":
@@ -425,21 +436,33 @@ def main():
             bufsize=1,
         )
 
-        result = None
-        for line in proc.stdout:
-            line = line.rstrip("\n")
-            if not line:
-                continue
-            if line.startswith("RESULT:"):
-                try:
-                    result = json.loads(line[len("RESULT:"):])
-                except json.JSONDecodeError:
-                    pass
-            else:
-                send_message({"type": "progress", "line": line})
+        # Absolute ceiling: kills the child even if it hangs with stdout open
+        # (the read loop below otherwise blocks forever and proc.wait() below
+        # is never reached). Set well above the script's own retry budget —
+        # get_pdf_url alone can legitimately run ~70s (4 retries, ~15s mirror
+        # races apart) before Unpaywall/publisher/download tiers even start —
+        # so this only ever catches a true hang, not slow-but-progressing work.
+        HARD_TIMEOUT_SECONDS = 180
+        watchdog = threading.Timer(HARD_TIMEOUT_SECONDS, proc.kill)
+        watchdog.start()
+        try:
+            result = None
+            for line in proc.stdout:
+                line = line.rstrip("\n")
+                if not line:
+                    continue
+                if line.startswith("RESULT:"):
+                    try:
+                        result = json.loads(line[len("RESULT:"):])
+                    except json.JSONDecodeError:
+                        pass
+                else:
+                    send_message({"type": "progress", "line": line})
 
-        stderr_output = proc.stderr.read()
-        proc.wait(timeout=90)
+            stderr_output = proc.stderr.read()
+            proc.wait(timeout=90)
+        finally:
+            watchdog.cancel()
 
         if result is not None:
             send_message({"type": "result", **result})

@@ -71,11 +71,11 @@ Two halves that talk to each other over [Chrome's Native Messaging protocol](htt
                                                                           └──────────────────────────┘
 ```
 
-The extension talks to the free **Crossref**, **OpenAlex**, and **Semantic Scholar** REST APIs directly (no key required for any of them) for metadata, references, citations, and recommendations — only the actual PDF-fetching goes through the native host.
+The extension talks to the free **Crossref**, **OpenAlex**, and **Semantic Scholar** REST APIs directly (no key required for any of them) for metadata, references, citations, and recommendations. It also makes best-effort calls to **ORCID** (`pub.orcid.org`) and **Gravatar** (`www.gravatar.com`) to fetch an author avatar on the author pages — ORCID to find a public contact email, Gravatar to turn that email into a photo (falling back to initials when there's no public email or registered avatar). Only the actual PDF-fetching goes through the native host.
 
 ## Prerequisites
 
-- **macOS or Windows**, with **Google Chrome** (or another Chromium-based browser that supports MV3 + Native Messaging, e.g. Brave/Edge — untested here, but should work)
+- **macOS, Windows, or Linux**, with **Google Chrome** (or another Chromium-based browser that supports MV3 + Native Messaging, e.g. Brave/Edge — untested here, but should work)
 - **Python 3** with the [`requests`](https://pypi.org/project/requests/) and [`beautifulsoup4`](https://pypi.org/project/beautifulsoup4/) packages installed:
   ```bash
   pip3 install requests beautifulsoup4      # macOS/Linux
@@ -173,8 +173,8 @@ Click the toolbar icon on any page with a detected DOI to get:
 | **Copy Sci-Hub Link** | Resolves and copies the mirror URL without downloading anything. |
 | **View on Sci-Hub** | Opens the paper directly on a working Sci-Hub mirror in a new tab (auto-expands the PDF viewer to fill the tab). |
 | **View Sage PDF (Open Access)** | Only shown for SAGE papers (`10.1177/...`) marked unavailable — opens SAGE's own PDF viewer directly, since some are open-access despite Sci-Hub/Unpaywall having nothing. |
-| **More by This Author** | Opens the [Download All Works](#more-by-this-author) page for the detected author. |
-| **Download All Works** | Same as above. |
+| **More by This Author** | Opens a Google Scholar search for the detected author's name in a new tab. |
+| **Download All Works** | Opens the [Download All Works](#more-by-this-author) page (Crossref-based bulk download) for the detected author. |
 | **Common Collaborators** | Opens the [co-author network page](#common-collaborators) for the detected author. |
 | **Download This Issue** | Opens the [issue download page](#download-this-issue) for the paper's volume/issue. |
 | **QR Code** | Shows a scannable QR code (generated fully offline — nothing leaves your machine) linking to the article on Sci-Hub, for opening on your phone. |

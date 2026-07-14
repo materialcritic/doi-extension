@@ -6,9 +6,11 @@ Usage: python scihub_download.py <DOI or PMID or URL>
 
 import argparse
 import json
+import os
 import queue
 import re
 import sys
+import tempfile
 import threading
 import time
 from datetime import datetime, timedelta
@@ -22,7 +24,7 @@ MIRROR_HEALTH_PATH = Path(__file__).resolve().parent / 'mirror_health.json'
 # Contact address sent on every Unpaywall request, per their usage policy —
 # not a login, just how they reach someone if the API is being misused.
 # Replace with your own address if you're running this yourself.
-UNPAYWALL_EMAIL = 'rohxn@proton.me'
+UNPAYWALL_EMAIL = '111hui@protonmail.com'
 MIRROR_COOLDOWN_MINUTES = 10
 MIRROR_FAIL_THRESHOLD = 3
 MIRROR_HEALTH_MAX_AGE_DAYS = 4
@@ -59,10 +61,24 @@ def prune_mirror_health(health):
 
 
 def save_mirror_health(health):
+    # Written via a temp file + os.replace (atomic on both POSIX and Windows)
+    # rather than a direct 'w' open, so a concurrent reader (e.g. a badge
+    # check firing mid-write, or two batch tabs running at once) never sees a
+    # half-written file — only ever the old version or the new one.
     try:
         MIRROR_HEALTH_PATH.parent.mkdir(parents=True, exist_ok=True)
-        with open(MIRROR_HEALTH_PATH, 'w') as f:
-            json.dump(prune_mirror_health(health), f, indent=2)
+        data = json.dumps(prune_mirror_health(health), indent=2)
+        fd, tmp = tempfile.mkstemp(dir=str(MIRROR_HEALTH_PATH.parent), suffix='.tmp')
+        try:
+            with os.fdopen(fd, 'w') as f:
+                f.write(data)
+            os.replace(tmp, MIRROR_HEALTH_PATH)
+        except Exception:
+            try:
+                os.unlink(tmp)
+            except OSError:
+                pass
+            raise
     except OSError:
         pass
 
@@ -120,6 +136,8 @@ class SciHubDownloader:
         'https://sci-hub.ee',
         'https://sci-hub.shop',
         'https://sci-hub.vg',
+        'https://sci-hub.red',
+        'https://sci-hub.su',
     ]
     
     def __init__(self, output_dir='papers', verbose=False, mirrors=None):

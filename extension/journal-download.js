@@ -30,6 +30,17 @@ function getSettings() {
   });
 }
 
+// Pages can't know the user's home directory themselves — asks the native
+// host, which resolves it via os.path.expanduser("~"), for the "leave output
+// folder blank" default instead of hardcoding one machine's path.
+function getDefaultOutputDir() {
+  return new Promise((resolve) => {
+    chrome.runtime.sendMessage({ action: "getDefaultOutputDir" }, (resp) => {
+      resolve(resp && resp.success && resp.path ? resp.path : "");
+    });
+  });
+}
+
 function groupWorksByIssue(works) {
   const groups = new Map();
   works.forEach((w) => {
@@ -291,7 +302,8 @@ async function init() {
   }
 
   const settings = await getSettings();
-  baseOutputDir = (settings.outputDir || "/Users/floppa/Downloads/autorename").replace(/\/+$/, "");
+  baseOutputDir = (settings.outputDir || "").replace(/\/+$/, "");
+  if (!baseOutputDir) baseOutputDir = (await getDefaultOutputDir()).replace(/\/+$/, "");
 
   const resp = await new Promise((resolve) => chrome.runtime.sendMessage({ action: "getAllJournalWorks", issn }, resolve));
 

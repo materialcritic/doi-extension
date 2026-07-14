@@ -80,6 +80,17 @@ function getSettings() {
   });
 }
 
+// Pages can't know the user's home directory themselves — asks the native
+// host, which resolves it via os.path.expanduser("~"), for the "leave output
+// folder blank" default instead of hardcoding one machine's path.
+function getDefaultOutputDir() {
+  return new Promise((resolve) => {
+    chrome.runtime.sendMessage({ action: "getDefaultOutputDir" }, (resp) => {
+      resolve(resp && resp.success && resp.path ? resp.path : "");
+    });
+  });
+}
+
 let works = []; // master list, Crossref relevance order — never reordered
 let displayWorks = []; // current sorted view, rendered from
 const selectedKeys = new Set(); // work.doi (or title as fallback) for works checked to download
@@ -98,7 +109,8 @@ function workKey(work) {
 // button write to the same place.
 async function resolveOutputPaths() {
   const settings = await getSettings();
-  const baseDir = (settings.outputDir || "/Users/floppa/Downloads/autorename").replace(/\/+$/, "");
+  let baseDir = (settings.outputDir || "").replace(/\/+$/, "");
+  if (!baseDir) baseDir = (await getDefaultOutputDir()).replace(/\/+$/, "");
   const folderName = sanitizeFolderName(`Similar Papers - ${sourceTitle || query}`);
   outputDirOverride = `${baseDir}/${folderName}`;
   logPath = `${outputDirOverride}/download_log.txt`;
