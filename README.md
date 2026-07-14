@@ -34,7 +34,6 @@ This is a **personal, single-machine tool** — it is not published on the Chrom
 - [Project structure](#project-structure)
 - [Known limitations](#known-limitations)
 - [Troubleshooting](#troubleshooting)
-- [Development workflow](#development-workflow)
 
 ---
 
@@ -323,8 +322,6 @@ doi-extension/
 └── ...
 ```
 
-> `SESSION_LOG.md` and `make_icons.py` exist locally but are intentionally left out of git (see `.gitignore`) — the former is a running dev log of *why* decisions were made across every build session (genuinely useful background reading, just not meant to be a published artifact), the latter a one-off throwaway script that rendered the toolbar icon once.
-
 ## Known limitations
 
 - **PhilPapers and Google Scholar can't be scraped** — both are permanently blocked (Cloudflare challenge and no free API, respectively). All author/paper search is Crossref-based instead.
@@ -349,7 +346,3 @@ doi-extension/
 
 **Popup shows the right DOI but every action button stays disabled:**
 - The background availability check may still be running — give it a few seconds, or check `chrome://extensions` for a service worker error.
-
-## Development workflow
-
-> ⚠️ **This repo is the backup/source of truth for the extension.** Whenever you edit anything under `extension/` or `native-host/` on this machine (in the `~/Downloads/doi-extension` working copy or wherever you've placed it), **commit and push before ending the session**. Loading-unpacked changes are only saved locally — if this folder is lost or a new machine is set up before those edits are pushed, they're gone. There's no automation enforcing this (no git hook), just this reminder: check `git status` in the repo root and push if anything's pending.
