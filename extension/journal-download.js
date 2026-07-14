@@ -99,10 +99,10 @@ function updateStatusText(extra) {
   progressBarEl.style.width = pct + "%";
 }
 
-// Lets the user drop a specific article before it's downloaded. Only
-// meaningful while it's still Pending — once a download is in flight the
-// request can't be un-sent, and there's nothing left to remove once it's
-// finished (successfully or not).
+// Lets the user pick exactly which articles to download, per-article or by
+// toggling a whole issue at once. Only meaningful while a row is still
+// Pending — once a download is in flight the request can't be un-sent, and
+// there's nothing left to pick once it's finished (successfully or not).
 function fetchWorkAbstract(doi) {
   return new Promise((resolve) => {
     chrome.runtime.sendMessage({ action: "getWorkAbstract", doi }, (resp) => {
@@ -111,9 +111,29 @@ function fetchWorkAbstract(doi) {
   });
 }
 
-function buildGroupRow(work, onRemove) {
+// Recomputes the overall queued-total from every group's current checkbox
+// selections (works.removed === true means "unchecked, skip"), then
+// refreshes the progress text and each group's idle label/checkbox state.
+// Called after every checkbox toggle rather than incrementally tracked, so
+// repeatedly checking/unchecking the same row never drifts out of sync.
+function recomputeSelection(allGroups) {
+  totalWorks = allGroups.reduce((sum, { group }) => sum + group.works.filter((w) => !w.removed).length, 0);
+  updateStatusText();
+  allGroups.forEach(({ group, refreshIdleLabel, refreshGroupCheckbox }) => {
+    refreshIdleLabel();
+    refreshGroupCheckbox();
+  });
+}
+
+function buildGroupRow(work, onToggle) {
   const row = document.createElement("div");
   row.className = "work-row";
+
+  const checkbox = document.createElement("input");
+  checkbox.type = "checkbox";
+  checkbox.className = "row-checkbox";
+  checkbox.checked = true;
+  checkbox.title = "Include this article in the download";
 
   const title = document.createElement("div");
   title.className = "work-title clickable";
@@ -140,22 +160,16 @@ function buildGroupRow(work, onRemove) {
   status.className = "work-status";
   status.textContent = "Pending";
 
-  const removeBtn = document.createElement("button");
-  removeBtn.className = "row-remove-btn";
-  removeBtn.title = "Don't download this article";
-  removeBtn.textContent = "✕";
-  removeBtn.addEventListener("click", () => {
-    work.removed = true;
-    status.textContent = "Removed";
-    status.className = "work-status removed";
-    removeBtn.style.display = "none";
-    onRemove();
+  checkbox.addEventListener("change", () => {
+    work.removed = !checkbox.checked;
+    row.classList.toggle("row-skip", !checkbox.checked);
+    onToggle();
   });
 
+  row.appendChild(checkbox);
   row.appendChild(title);
   row.appendChild(status);
-  row.appendChild(removeBtn);
-  return { row, statusEl: status, removeBtn };
+  return { row, statusEl: status, checkbox };
 }
 
 function buildGroupSection(group) {
@@ -163,6 +177,15 @@ function buildGroupSection(group) {
   details.className = "issue-group";
 
   const summary = document.createElement("summary");
+
+  const groupCheckbox = document.createElement("input");
+  groupCheckbox.type = "checkbox";
+  groupCheckbox.className = "group-checkbox";
+  groupCheckbox.checked = true;
+  groupCheckbox.title = "Include this whole issue in the download";
+  // Toggling the summary's own <details> open/closed shouldn't fire just
+  // because the user clicked the checkbox inside it.
+  groupCheckbox.addEventListener("click", (e) => e.stopPropagation());
 
   const chevron = document.createElement("span");
   chevron.className = "chevron";
@@ -189,6 +212,26 @@ function buildGroupSection(group) {
   }
   refreshIdleLabel();
 
+  // Reflects the current mix of per-article checkboxes: all checked, all
+  // unchecked, or (via the indeterminate visual state) some of each.
+  function refreshGroupCheckbox() {
+    const n = remainingCount();
+    groupCheckbox.checked = n > 0;
+    groupCheckbox.indeterminate = n > 0 && n < group.works.length;
+  }
+
+  groupCheckbox.addEventListener("change", () => {
+    const checked = groupCheckbox.checked;
+    rowRefs.forEach(({ work, checkbox, row }) => {
+      if (work.started) return; // too late to toggle one already in flight/done
+      work.removed = !checked;
+      checkbox.checked = checked;
+      row.classList.toggle("row-skip", !checked);
+    });
+    recomputeSelection(allGroupsRef.current);
+  });
+
+  summary.appendChild(groupCheckbox);
   summary.appendChild(chevron);
   summary.appendChild(label);
   summary.appendChild(status);
@@ -198,18 +241,20 @@ function buildGroupSection(group) {
   workList.className = "group-works";
 
   const rowRefs = group.works.map((work) => {
-    const { row, statusEl, removeBtn } = buildGroupRow(work, () => {
-      totalWorks -= 1;
-      updateStatusText();
-      refreshIdleLabel();
-    });
+    const { row, statusEl, checkbox } = buildGroupRow(work, () => recomputeSelection(allGroupsRef.current));
     workList.appendChild(row);
-    return { work, statusEl, removeBtn };
+    return { work, statusEl, checkbox, row };
   });
 
   details.appendChild(workList);
-  return { details, statusEl: status, rowRefs };
+  return { details, statusEl: status, rowRefs, refreshIdleLabel, refreshGroupCheckbox };
 }
+
+// buildGroupSection() (and the checkbox handlers it wires up) run before
+// init() has finished building the full group list, so the handlers close
+// over this mutable holder instead of the array itself — by the time a user
+// can actually click anything, allGroupsRef.current has been filled in.
+const allGroupsRef = { current: [] };
 
 async function downloadGroup(group, groupStatusEl, rowRefs) {
   const folderName = sanitizeFolderName(`${journal || issn} Vol ${group.volume} Issue ${group.issueNum || "unknown"}`);
@@ -225,17 +270,18 @@ async function downloadGroup(group, groupStatusEl, rowRefs) {
   groupStatusEl.className = "group-status active";
   groupStatusEl.textContent = `downloading 0/${queued}…`;
 
-  for (const { work, statusEl, removeBtn } of rowRefs) {
-    if (work.removed) continue; // user dropped it before its turn came up
+  for (const { work, statusEl, checkbox } of rowRefs) {
+    if (work.removed) continue; // user unchecked it before its turn came up
 
     await waitWhilePaused();
     if (control.cancelled) {
       statusEl.textContent = "Skipped";
-      removeBtn.style.display = "none";
+      checkbox.disabled = true;
       continue;
     }
 
-    removeBtn.style.display = "none"; // too late to remove once it's about to download
+    work.started = true; // too late to toggle once it's about to download
+    checkbox.disabled = true;
     statusEl.textContent = "Downloading…";
     statusEl.className = "work-status active";
     groupStatusEl.textContent = `downloading ${done + failed + 1}/${queued}…`;
@@ -331,10 +377,11 @@ async function init() {
   totalsTextEl.textContent = totalsSummary;
 
   const built = groups.map((group) => {
-    const { details, statusEl, rowRefs } = buildGroupSection(group);
+    const { details, statusEl, rowRefs, refreshIdleLabel, refreshGroupCheckbox } = buildGroupSection(group);
     groupsEl.appendChild(details);
-    return { group, details, statusEl, rowRefs };
+    return { group, details, statusEl, rowRefs, refreshIdleLabel, refreshGroupCheckbox };
   });
+  allGroupsRef.current = built;
 
   toolbarEl.style.display = "block";
   updateStatusText();

@@ -26,10 +26,52 @@ IS_MACOS = platform.system() == "Darwin"
 # copy shipped alongside this host; override via the extension's Settings
 # page (Script path) instead of editing this if yours lives elsewhere.
 YOUR_SCRIPT = os.path.join(SCRIPT_DIR, "scihub_download.py")
+def find_python_with_requests():
+    """Chrome's spawn PATH often differs from a Terminal shell's — on macOS in
+    particular, the first python3 on PATH is frequently Apple's system one
+    (no pip packages), while a Homebrew/pyenv install with `requests`/`bs4`
+    sits elsewhere on PATH or isn't on Chrome's PATH at all. Rather than just
+    taking shutil.which()'s first match and letting the script crash with
+    ModuleNotFoundError, actually test each candidate and prefer one that has
+    the packages scihub_download.py needs. Falls back to the plain
+    first-found interpreter (or sys.executable) if none qualify, so the
+    error message a user sees is still the familiar, actionable one — and
+    Settings' Python interpreter path always overrides this entirely."""
+    candidates = []
+    for name in ("python3", "python"):
+        found = shutil.which(name)
+        if found:
+            candidates.append(found)
+    # Common install locations that may not be on Chrome's (narrower) PATH
+    # even though they are on a Terminal shell's.
+    candidates += [
+        "/opt/homebrew/bin/python3",       # Homebrew, Apple Silicon
+        "/usr/local/bin/python3",          # Homebrew, Intel
+        os.path.expanduser("~/.pyenv/shims/python3"),
+    ]
+
+    seen = set()
+    for candidate in candidates:
+        if not candidate or candidate in seen or not os.path.isfile(candidate):
+            continue
+        seen.add(candidate)
+        try:
+            result = subprocess.run(
+                [candidate, "-c", "import requests, bs4"],
+                capture_output=True, timeout=5,
+            )
+            if result.returncode == 0:
+                return candidate
+        except (OSError, subprocess.SubprocessError):
+            continue
+
+    return shutil.which("python3") or shutil.which("python") or sys.executable
+
+
 # Chrome launches this host with its own python3/python, which may lack
 # packages your script needs (e.g. requests). Override via Settings (Python
 # interpreter path) if the auto-detected one below doesn't have them.
-PYTHON_BIN = shutil.which("python3") or shutil.which("python") or sys.executable
+PYTHON_BIN = find_python_with_requests()
 # Kept in sync with scihub_download.py's own constants — this host reads the
 # same file, it doesn't own it.
 MIRROR_HEALTH_PATH = os.path.join(SCRIPT_DIR, "mirror_health.json")
@@ -418,12 +460,15 @@ def main():
     script_path = settings.get("scriptPath") or YOUR_SCRIPT
     output_dir = settings.get("outputDir")
     mirrors = settings.get("mirrors")
+    unpaywall_email = settings.get("unpaywallEmail")
 
     cmd = [python_bin, script_path, doi]
     if output_dir:
         cmd += ["-d", output_dir]
     if mirrors:
         cmd += ["-m", ",".join(mirrors)]
+    if unpaywall_email:
+        cmd += ["--email", unpaywall_email]
     if message.get("action") == "check":
         cmd += ["--check"]
 

@@ -23,7 +23,8 @@ from bs4 import BeautifulSoup
 MIRROR_HEALTH_PATH = Path(__file__).resolve().parent / 'mirror_health.json'
 # Contact address sent on every Unpaywall request, per their usage policy —
 # not a login, just how they reach someone if the API is being misused.
-# Replace with your own address if you're running this yourself.
+# Overridable per-request via --email / the extension's Settings page
+# (Connection card); this is only the fallback when neither is set.
 UNPAYWALL_EMAIL = '111hui@protonmail.com'
 MIRROR_COOLDOWN_MINUTES = 10
 MIRROR_FAIL_THRESHOLD = 3
@@ -140,12 +141,13 @@ class SciHubDownloader:
         'https://sci-hub.su',
     ]
     
-    def __init__(self, output_dir='papers', verbose=False, mirrors=None):
+    def __init__(self, output_dir='papers', verbose=False, mirrors=None, unpaywall_email=None):
         self.output_dir = Path(output_dir)
         self.output_dir.mkdir(parents=True, exist_ok=True)
         self.verbose = verbose
         if mirrors:
             self.SCIHUB_URLS = mirrors
+        self.unpaywall_email = unpaywall_email or UNPAYWALL_EMAIL
         self.session = requests.Session()
         self.session.headers.update({
             'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
@@ -361,7 +363,7 @@ class SciHubDownloader:
         try:
             url = f'https://api.unpaywall.org/v2/{quote(doi, safe="")}'
             self.log(f"Checking Unpaywall: {url}")
-            response = self.session.get(url, params={'email': UNPAYWALL_EMAIL}, timeout=15)
+            response = self.session.get(url, params={'email': self.unpaywall_email}, timeout=15)
             if response.status_code != 200:
                 self.log(f"Unpaywall status {response.status_code}")
                 return None
@@ -564,11 +566,15 @@ def main():
         action='store_true',
         help='Only check whether a PDF is available, without downloading it'
     )
+    parser.add_argument(
+        '--email',
+        help='Contact email sent with Unpaywall API requests (default: the UNPAYWALL_EMAIL constant in this file)'
+    )
 
     args = parser.parse_args()
 
     mirrors = [m.strip() for m in args.mirrors.split(',') if m.strip()] if args.mirrors else None
-    downloader = SciHubDownloader(output_dir=args.directory, verbose=args.verbose, mirrors=mirrors)
+    downloader = SciHubDownloader(output_dir=args.directory, verbose=args.verbose, mirrors=mirrors, unpaywall_email=args.email)
 
     if args.check:
         pdf_url = downloader.get_pdf_url(args.identifier)

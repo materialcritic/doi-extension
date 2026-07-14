@@ -281,7 +281,7 @@ function checkAuthorWatchlist() {
 
 function getSettings() {
   return new Promise((resolve) => {
-    chrome.storage.sync.get(["outputDir", "pythonBin", "scriptPath", "mirrors"], resolve);
+    chrome.storage.sync.get(["outputDir", "pythonBin", "scriptPath", "mirrors", "unpaywallEmail"], resolve);
   });
 }
 

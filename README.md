@@ -157,8 +157,9 @@ Open the extension's **Settings** page (right-click the toolbar icon → Options
 | **Python interpreter path** | Full path to a `python3`/`python` that has `requests` and `beautifulsoup4` installed (e.g. `/opt/homebrew/bin/python3` for Homebrew on Apple Silicon, or `C:\Users\you\AppData\Local\Programs\Python\Python312\python.exe` on Windows). Chrome may launch the native host with a system interpreter that lacks your packages — this field overrides that per-request. |
 | **Script path** | Full path to `scihub_download.py` (in this repo: `native-host/scihub_download.py`). Also overridable at runtime. |
 | **Sci-Hub mirrors** | One URL per line. Leave blank to use the script's built-in mirror list. |
+| **Unpaywall contact email** | Sent with every Unpaywall API request, per their usage policy (just how they'd reach you if the API were being misused — not a login). Leave blank to use `scihub_download.py`'s built-in default. |
 
-One thing is **not** exposed in the UI and is hardcoded directly in `scihub_download.py` instead: `UNPAYWALL_EMAIL` — Unpaywall's API asks for a real contact address in every request per their usage policy; replace the placeholder with your own if you're running this yourself.
+The Unpaywall email is the one setting worth actually filling in on first setup rather than leaving blank — it's a real usage-policy requirement, and the built-in default is the maintainer's own address, not a placeholder.
 
 ### 4. Try it
 
@@ -259,7 +260,7 @@ A **"Find Similar"** link next to any paper's title (on the author/issue/journal
 Right-click the toolbar icon → **Options** (or click ⚙ in the popup):
 
 - **Appearance** — 6 color themes: Dark (default), Warm Parchment, Cool Slate, Soft Sage, Pure Minimal, Carrot
-- **Connection** — output folder, Python interpreter path, script path, Sci-Hub mirror list (see [Installation](#3-point-the-extension-at-your-python-setup))
+- **Connection** — output folder, Python interpreter path, script path, Sci-Hub mirror list, Unpaywall contact email (see [Installation](#3-point-the-extension-at-your-python-setup))
 - **Keyboard Shortcuts** — read-only view of the current Alt+D/Alt+F bindings, with a link to Chrome's remap page
 - **Popup Shortcuts** — reassign any of the single-key popup shortcuts
 - **Journal Watchlist** / **Author Watchlist** — manage what you're currently watching, with a manual "Check Now"
