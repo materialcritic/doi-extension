@@ -91,9 +91,15 @@ The extension talks to the free **Crossref**, **OpenAlex**, and **Semantic Schol
 
 ## Prerequisites
 
-- **macOS** with **Google Chrome** (or another Chromium-based browser that supports MV3 + Native Messaging, e.g. Brave/Edge — untested here, but should work)
-- **Python 3** with the [`requests`](https://pypi.org/project/requests/) package installed
-- Familiarity with `chrome://extensions` Developer Mode and running shell scripts from Terminal
+- **macOS or Windows**, with **Google Chrome** (or another Chromium-based browser that supports MV3 + Native Messaging, e.g. Brave/Edge — untested here, but should work)
+- **Python 3** with the [`requests`](https://pypi.org/project/requests/) and [`beautifulsoup4`](https://pypi.org/project/beautifulsoup4/) packages installed:
+  ```bash
+  pip3 install requests beautifulsoup4      # macOS/Linux
+  py -m pip install requests beautifulsoup4 # Windows
+  ```
+- Familiarity with `chrome://extensions` Developer Mode, and running shell scripts from Terminal (macOS) or PowerShell (Windows)
+
+`native-host/doi_host.py` and `native-host/scihub_download.py` auto-detect sensible defaults (their own folder for log/health files, `python3`/`python`/the `py` launcher for the interpreter, `~/Downloads/autorename` for the output folder) so they work out of the box on both platforms — nothing needs source-editing before first install, only the Settings-page fields below.
 
 ## Installation
 
@@ -111,7 +117,10 @@ cd doi-extension
 
 ### 2. Install the Native Messaging host
 
-> **Important — do this from outside your Downloads folder.** macOS Gatekeeper attaches a quarantine flag to files that were downloaded through a browser (including `git clone`d into a `~/Downloads` subfolder in some setups, and definitely anything saved there via a browser). That quarantine flag silently blocks Chrome from executing `doi_host.py`, and the failure just looks like "native host has exited" with no clear reason. Move (or re-clone) the repo to a normal location first, e.g. `~/doi-extension`, before running the installer.
+<details open>
+<summary><strong>macOS / Linux</strong></summary>
+
+> **Important — do this from outside your Downloads folder.** macOS Gatekeeper attaches a quarantine flag to files that were downloaded through a browser (including a repo cloned into a `~/Downloads` subfolder in some setups). That quarantine flag silently blocks Chrome from executing `doi_host.py`, and the failure just looks like "native host has exited" with no clear reason. Move (or re-clone) the repo to a normal location first, e.g. `~/doi-extension`, before running the installer.
 
 ```bash
 cd ~/doi-extension/native-host   # wherever you placed it, outside Downloads
@@ -121,27 +130,48 @@ cd ~/doi-extension/native-host   # wherever you placed it, outside Downloads
 The installer will:
 - `chmod +x doi_host.py`
 - Ask for the **Extension ID** from step 1
-- Write `com.doi_grabber.host.json` (the Native Messaging manifest Chrome reads) to `~/Library/Application Support/Google/Chrome/NativeMessagingHosts/`, pointing at your `doi_host.py`
+- Write `com.doi_grabber.host.json` (the Native Messaging manifest Chrome reads) to `~/Library/Application Support/Google/Chrome/NativeMessagingHosts/` (macOS) or `~/.config/google-chrome/NativeMessagingHosts/` (Linux), pointing at your `doi_host.py`
+
+</details>
+
+<details>
+<summary><strong>Windows</strong></summary>
+
+```powershell
+cd doi-extension\native-host
+.\install.ps1
+```
+
+If PowerShell blocks the script from running, allow it for this session first: `Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass`.
+
+The installer will:
+- Ask for the **Extension ID** from step 1
+- Write `com.doi_grabber.host.json` next to itself in `native-host\`, with `"path"` pointing at `doi_host.bat` (a small wrapper — Chrome needs an executable it can spawn directly, and can't run a bare `.py` file the way macOS/Linux can via a shebang line)
+- Register that manifest's path in the registry at `HKCU:\Software\Google\Chrome\NativeMessagingHosts\com.doi_grabber.host` (Windows has no fixed native-messaging-hosts folder like macOS/Linux — it uses the registry instead)
+
+`doi_host.bat` looks for the `py` launcher (bundled with the standard python.org Windows installer) first, falling back to `python` on PATH.
+
+> Windows support here is implemented but not verified on a real Windows machine — if something doesn't work, please [file a bug report](#reporting-a-bug-or-requesting-a-feature) with the exact error.
+
+</details>
 
 ### 3. Point the extension at your Python setup
 
-Open the extension's **Settings** page (right-click the toolbar icon → Options, or click the ⚙ in the popup) and fill in the **Connection** card:
+Open the extension's **Settings** page (right-click the toolbar icon → Options, or click the ⚙ in the popup) and fill in the **Connection** card — only needed if the auto-detected defaults don't already work for you:
 
 | Field | What it is |
 |---|---|
-| **Output folder** | Where downloaded PDFs are saved. Leave blank to use `scihub_download.py`'s built-in default (`~/Downloads/autorename`). |
-| **Python interpreter path** | Full path to a `python3` that has `requests` installed (e.g. `/opt/homebrew/bin/python3` for a Homebrew install on Apple Silicon). Chrome launches the native host with its own system `python3` by default, which usually lacks your packages — this field overrides that per-request, no source editing needed. |
-| **Script path** | Full path to `scihub_download.py` (in this repo: `native-host/scihub_download.py`). Also overridable at runtime — no source editing needed. |
+| **Output folder** | Where downloaded PDFs are saved. Leave blank to use `scihub_download.py`'s default (`~/Downloads/autorename`, or `%USERPROFILE%\Downloads\autorename` on Windows). |
+| **Python interpreter path** | Full path to a `python3`/`python` that has `requests` and `beautifulsoup4` installed (e.g. `/opt/homebrew/bin/python3` for Homebrew on Apple Silicon, or `C:\Users\you\AppData\Local\Programs\Python\Python312\python.exe` on Windows). Chrome may launch the native host with a system interpreter that lacks your packages — this field overrides that per-request. |
+| **Script path** | Full path to `scihub_download.py` (in this repo: `native-host/scihub_download.py`). Also overridable at runtime. |
 | **Sci-Hub mirrors** | One URL per line. Leave blank to use the script's built-in mirror list. |
 
-A few settings are **not** exposed in the UI and are hardcoded directly in the Python files instead — edit these once if you're setting up on a new machine or a different path than the original author's:
-
-- `native-host/doi_host.py`: `MIRROR_HEALTH_PATH`, `DOWNLOAD_LOG_PATH` (must point at wherever you keep `native-host/`)
-- `native-host/scihub_download.py`: `MIRROR_HEALTH_PATH`, the download log path, and `UNPAYWALL_EMAIL` (Unpaywall's API asks for a real contact address in every request per their usage policy — put your own here, not the original author's)
+A couple of things are **not** exposed in the UI and are hardcoded directly in `scihub_download.py` instead:
+- `UNPAYWALL_EMAIL` — Unpaywall's API asks for a real contact address in every request per their usage policy; replace the placeholder with your own if you're running this yourself.
 
 ### 4. Try it
 
-1. Restart Chrome (Native Messaging hosts are only re-spawned on a fresh connection after a full restart, or a disable/re-enable of the extension — a plain "reload" of the extension is **not** enough after changing `doi_host.py` or `scihub_download.py`).
+1. Fully restart Chrome (Native Messaging hosts are only re-spawned on a fresh connection after a full restart, or a disable/re-enable of the extension — a plain "reload" of the extension is **not** enough after changing `doi_host.py` or `scihub_download.py`).
 2. Visit any academic paper's page (try a DOI resolver link like `https://doi.org/10.1234/example`, or any journal article page).
 3. Click the toolbar icon. If a DOI was detected, you'll see it in the box and the **Download** button will enable.
 4. Click **Download** and watch the live log scroll as it races mirrors and saves the file.
@@ -165,7 +195,7 @@ Click the toolbar icon on any page with a detected DOI to get:
 | **References** | Lists the paper's references (via Crossref), each row clickable straight to Sci-Hub. |
 | **Cited By** | Lists papers that cite this one (via Semantic Scholar). |
 | **Related Papers** | Citation-graph-based recommendations (via Semantic Scholar's Recommendations API) — different from the keyword-based "Find Similar" on the full-page tools. |
-| **Reveal in Finder** | Shown after a successful download — opens Finder with the file selected. |
+| **Reveal in Finder** | Shown after a successful download — opens Finder (macOS) or File Explorer (Windows) with the file selected. |
 | **Delete Corrupt File** | Shown if the download failed the PDF-header check (usually means a mirror served an HTML error page instead of a real PDF). |
 | **Search Google Instead** | Opens a Google search for `<title> <author>` — always available, not just when unavailable. |
 | ⚙ (top right) | Opens Settings. |
@@ -285,33 +315,40 @@ doi-extension/
 │   ├── doi_host.py                 # Native Messaging host — spawns scihub_download.py, streams
 │   │                               #   progress, handles reveal/delete/mirror-health/export actions
 │   ├── scihub_download.py         # The actual DOI → PDF downloader (Sci-Hub/Unpaywall/publisher)
-│   ├── com.doi_grabber.host.json  # Native Messaging manifest template (install.sh fills this in)
-│   └── install.sh                  # Installer — registers the native host with Chrome
-├── make_icons.py                   # One-off script that rendered the toolbar icon from SVG
-└── SESSION_LOG.md                  # Full build history/design-decision log across every session
+│   ├── com.doi_grabber.host.json  # Native Messaging manifest template (install.sh/install.ps1 fill this in)
+│   ├── install.sh                  # Installer for macOS/Linux — registers the native host with Chrome
+│   ├── install.ps1                 # Installer for Windows — same, via the Windows Registry
+│   └── doi_host.bat                # Windows wrapper so Chrome can spawn doi_host.py as an executable
+└── ...
 ```
 
-`SESSION_LOG.md` is worth a skim if you want the *why* behind a lot of these design choices — it documents every feature, bug, and dead-end across the project's build sessions in detail.
+> `SESSION_LOG.md` and `make_icons.py` exist locally but are intentionally left out of git (see `.gitignore`) — the former is a running dev log of *why* decisions were made across every build session (genuinely useful background reading, just not meant to be a published artifact), the latter a one-off throwaway script that rendered the toolbar icon once.
 
 ## Known limitations
 
-- **Not portable out of the box.** A few paths (log file, mirror health file, Unpaywall contact email) are hardcoded in the Python files rather than read from settings — see [step 3 of installation](#3-point-the-extension-at-your-python-setup).
 - **PhilPapers and Google Scholar can't be scraped** — both are permanently blocked (Cloudflare challenge and no free API, respectively). All author/paper search is Crossref-based instead.
 - **Tandfonline and some other Cloudflare-protected publishers** return a bot-challenge page to any server-side fetch — their PDFs/abstracts can only be reached by a real browser tab, not the native host. The SAGE-specific "View Sage PDF" button works around this on the extension side; other publishers don't currently have an equivalent.
 - **Crossref's author search is relevance-ranked, not a guaranteed-complete filter** — even at the 1,000-result cap, an extremely prolific author's most obscure works could theoretically be missed. There's no "everything by this ORCID" endpoint without a known ORCID iD.
 - Requires **restarting Chrome** (not just reloading the extension) after any change to `doi_host.py` or `scihub_download.py`, since the native host is a separate long-lived process.
+- **Windows support is implemented but unverified** on a real Windows machine (built and reasoned through, not hands-on tested) — see the callout in [step 2 of installation](#2-install-the-native-messaging-host).
+- On Linux, "Reveal in Finder" falls back to just opening the containing folder (via `xdg-open`) rather than selecting the file within it — there's no single standard way to select a specific file across Linux file managers the way `open -R`/`explorer /select,` do on macOS/Windows.
 
 ## Troubleshooting
 
 **"Native host has exited" / download does nothing:**
-- Check `doi_host.py` doesn't have a `com.apple.quarantine` extended attribute: `xattr -l native-host/doi_host.py`. If it does, `xattr -d com.apple.quarantine native-host/doi_host.py` (or make sure the whole repo lives outside `~/Downloads`).
+- **macOS:** check `doi_host.py` doesn't have a `com.apple.quarantine` extended attribute: `xattr -l native-host/doi_host.py`. If it does, `xattr -d com.apple.quarantine native-host/doi_host.py` (or make sure the whole repo lives outside `~/Downloads`).
+- **Windows:** confirm `doi_host.bat`'s path in `com.doi_grabber.host.json` matches where you actually placed `native-host/`, and that either the `py` launcher or `python` is on your PATH (`py --version` or `python --version` in PowerShell).
 - Make sure you fully restarted Chrome after installing/editing the native host, not just reloaded the extension.
 
 **Download runs but fails immediately:**
-- Check the Python interpreter set in Settings actually has `requests` installed: `<your-python-path> -c "import requests"`.
+- Check the Python interpreter set in Settings actually has `requests` and `beautifulsoup4` installed: `<your-python-path> -c "import requests, bs4"`.
 
 **No DOI detected on a page that clearly has one:**
 - Some publishers (SAGE was one) put author/title metadata in nonstandard places `content.js` may not check yet — file a bug report from Settings with the URL and what you'd expect it to detect.
 
 **Popup shows the right DOI but every action button stays disabled:**
 - The background availability check may still be running — give it a few seconds, or check `chrome://extensions` for a service worker error.
+
+## Development workflow
+
+> ⚠️ **This repo is the backup/source of truth for the extension.** Whenever you edit anything under `extension/` or `native-host/` on this machine (in the `~/Downloads/doi-extension` working copy or wherever you've placed it), **commit and push before ending the session**. Loading-unpacked changes are only saved locally — if this folder is lost or a new machine is set up before those edits are pushed, they're gone. There's no automation enforcing this (no git hook), just this reminder: check `git status` in the repo root and push if anything's pending.

@@ -7,6 +7,8 @@ script, and streams progress + a final result back to the extension.
 
 import csv
 import os
+import platform
+import shutil
 import sys
 import json
 import struct
@@ -14,20 +16,53 @@ import subprocess
 import time
 from datetime import datetime, timedelta
 
+SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+IS_WINDOWS = platform.system() == "Windows"
+IS_MACOS = platform.system() == "Darwin"
+
 # ── CONFIGURE THIS ────────────────────────────────────────────────────────────
-# Path to YOUR existing Python script that processes the DOI
-YOUR_SCRIPT = "/Users/floppa/bin/scihub_download.py"
-# Chrome launches this host with its own python3, which may lack packages
-# your script needs (e.g. requests). Use the interpreter that has them.
-PYTHON_BIN = "/opt/homebrew/bin/python3"
+# Path to YOUR existing Python script that processes the DOI. Defaults to the
+# copy shipped alongside this host; override via the extension's Settings
+# page (Script path) instead of editing this if yours lives elsewhere.
+YOUR_SCRIPT = os.path.join(SCRIPT_DIR, "scihub_download.py")
+# Chrome launches this host with its own python3/python, which may lack
+# packages your script needs (e.g. requests). Override via Settings (Python
+# interpreter path) if the auto-detected one below doesn't have them.
+PYTHON_BIN = shutil.which("python3") or shutil.which("python") or sys.executable
 # Kept in sync with scihub_download.py's own constants — this host reads the
 # same file, it doesn't own it.
-MIRROR_HEALTH_PATH = "/Users/floppa/doi-extension/native-host/mirror_health.json"
+MIRROR_HEALTH_PATH = os.path.join(SCRIPT_DIR, "mirror_health.json")
 MIRROR_FAIL_THRESHOLD = 3
 MIRROR_COOLDOWN_MINUTES = 10
 MIRROR_HEALTH_MAX_AGE_DAYS = 4
-DOWNLOAD_LOG_PATH = "/Users/floppa/doi-extension/native-host/download_log.txt"
+DOWNLOAD_LOG_PATH = os.path.join(SCRIPT_DIR, "download_log.txt")
 # ─────────────────────────────────────────────────────────────────────────────
+
+
+def open_in_file_manager(path):
+    """Open path's containing folder in Finder/Explorer/the default file
+    manager, selecting it where the platform supports that."""
+    if IS_MACOS:
+        subprocess.run(["open", path], check=True)
+    elif IS_WINDOWS:
+        # explorer.exe routinely returns a non-zero exit code even on
+        # success, so don't check=True here.
+        subprocess.run(["explorer", path])
+    else:
+        subprocess.run(["xdg-open", os.path.dirname(path) if os.path.isfile(path) else path], check=True)
+
+
+def reveal_in_file_manager(path):
+    """Open path's containing folder with path itself selected, where the
+    platform supports that (macOS/Windows); falls back to just opening the
+    containing folder on Linux, since there's no single standard way to
+    select a file across Linux file managers."""
+    if IS_MACOS:
+        subprocess.run(["open", "-R", path], check=True)
+    elif IS_WINDOWS:
+        subprocess.run(["explorer", "/select,", path])
+    else:
+        subprocess.run(["xdg-open", os.path.dirname(path)], check=True)
 
 
 def read_message():
@@ -254,7 +289,7 @@ def main():
         folder = message.get("folder")
         try:
             os.makedirs(folder, exist_ok=True)
-            subprocess.run(["open", folder], check=True)
+            open_in_file_manager(folder)
             send_message({"type": "result", "status": "ok"})
         except Exception as e:
             send_message({"type": "result", "status": "error", "detail": str(e)})
@@ -285,7 +320,7 @@ def main():
         filepath = message.get("filepath")
         try:
             target = resolve_reveal_target(filepath)
-            subprocess.run(["open", "-R", target], check=True)
+            reveal_in_file_manager(target)
             send_message({"type": "result", "status": "ok"})
         except Exception as e:
             send_message({"type": "result", "status": "error", "detail": str(e)})

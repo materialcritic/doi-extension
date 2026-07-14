@@ -14,3 +14,7 @@ doi-grabber-backup-*.zip
 
 __pycache__/
 *.pyc
+
+# Internal dev notes/one-off scripts — kept locally, not published
+SESSION_LOG.md
+make_icons.py

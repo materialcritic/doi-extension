@@ -18,9 +18,10 @@ from urllib.parse import quote, urljoin
 import requests
 from bs4 import BeautifulSoup
 
-MIRROR_HEALTH_PATH = Path('/Users/floppa/doi-extension/native-host/mirror_health.json')
+MIRROR_HEALTH_PATH = Path(__file__).resolve().parent / 'mirror_health.json'
 # Contact address sent on every Unpaywall request, per their usage policy —
 # not a login, just how they reach someone if the API is being misused.
+# Replace with your own address if you're running this yourself.
 UNPAYWALL_EMAIL = 'rohxn@proton.me'
 MIRROR_COOLDOWN_MINUTES = 10
 MIRROR_FAIL_THRESHOLD = 3
@@ -150,7 +151,7 @@ class SciHubDownloader:
         if error:
             parts.append(error)
         line = ' | '.join(parts)
-        log_path = Path('/Users/floppa/doi-extension/native-host') / 'download_log.txt'
+        log_path = Path(__file__).resolve().parent / 'download_log.txt'
         with open(log_path, 'a') as f:
             f.write(line + '\n')
     
@@ -528,8 +529,8 @@ def main():
     )
     parser.add_argument(
         '-d', '--directory',
-        default='/Users/floppa/Downloads/autorename',
-        help='Output directory (default: /Users/floppa/Downloads/autorename)'
+        default=str(Path.home() / 'Downloads' / 'autorename'),
+        help='Output directory (default: ~/Downloads/autorename)'
     )
     parser.add_argument(
         '-v', '--verbose',
