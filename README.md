@@ -90,9 +90,12 @@ The extension talks to the free **Crossref**, **OpenAlex**, and **Semantic Schol
 
 ### 1. Clone the repo and load the Chrome extension
 
-Pick one folder for the whole repo up front — both the extension and the native host need to live under the **same git checkout** (the [self-update feature](#keeping-it-up-to-date) runs `git pull` in whatever folder `native-host/doi_host.py` sits in, and that only makes sense if it's this repo). A plain `git clone` from Terminal doesn't trigger the macOS Gatekeeper quarantine flag (see the note below), so cloning straight into `~/Downloads` is fine — you don't need to relocate it afterwards.
+Pick one folder for the whole repo up front — both the extension and the native host need to live under the **same git checkout** (the [self-update feature](#keeping-it-up-to-date) runs `git pull` in whatever folder `native-host/doi_host.py` sits in, and that only makes sense if it's this repo).
+
+> **On macOS, clone somewhere other than `~/Downloads` (or `~/Desktop`/`~/Documents`).** Those are TCC-protected folders — even with the extension and native host wired up correctly, macOS can silently block Chrome from *executing* `doi_host.py` out of one of them, with no prompt and no useful error beyond a generic "native host has exited." A plain home-directory location like `~/doi-extension` avoids the whole problem. (This is separate from the Gatekeeper quarantine-flag issue below — that one's about *where the file came from*, this one's about *which folder it lives in*.)
 
 ```bash
+cd ~
 git clone https://github.com/materialcritic/doi-extension.git
 cd doi-extension
 ```
@@ -107,7 +110,9 @@ cd doi-extension
 <details open>
 <summary><strong>macOS / Linux</strong></summary>
 
-> **If Chrome reports "native host has exited" later, check for a quarantine flag first.** macOS Gatekeeper attaches `com.apple.quarantine` to files that were downloaded through a browser or saved by an app like TextEdit/Finder from a browser-downloaded source — that flag silently blocks Chrome from executing `doi_host.py`. A `git clone` run from Terminal does **not** set this flag, so it typically isn't an issue here — but if you ever hit it (e.g. after manually re-saving `doi_host.py` from a browser-downloaded copy), check with `xattr -l native-host/doi_host.py` and clear it with `xattr -d com.apple.quarantine native-host/doi_host.py`. See [Troubleshooting](#troubleshooting) for the full recovery steps.
+> **If Chrome reports "native host has exited," there are two independent macOS causes to rule out** (see [Troubleshooting](#troubleshooting) for full recovery steps):
+> 1. **Wrong folder (see the callout above)** — `doi_host.py` living under `~/Downloads`/`~/Desktop`/`~/Documents` can be silently blocked by macOS's TCC folder protection, with no error beyond this generic message. Move the whole repo to somewhere like `~/doi-extension` and re-run `./install.sh`.
+> 2. **Quarantine flag** — macOS Gatekeeper attaches `com.apple.quarantine` to files downloaded through a browser or saved by an app like TextEdit/Finder from a browser-downloaded source. A `git clone` run from Terminal does **not** set this flag, so it's rarer, but check with `xattr -l native-host/doi_host.py` and clear it with `xattr -d com.apple.quarantine native-host/doi_host.py` if present.
 
 ```bash
 cd doi-extension/native-host   # wherever you cloned the repo, from step 1
@@ -333,9 +338,11 @@ doi-extension/
 ## Troubleshooting
 
 **"Native host has exited" / download does nothing:**
-- **macOS:** check `doi_host.py` doesn't have a `com.apple.quarantine` extended attribute: `xattr -l native-host/doi_host.py`. If it does, `xattr -d com.apple.quarantine native-host/doi_host.py` (or make sure the whole repo lives outside `~/Downloads`).
+- **macOS, repo lives under `~/Downloads`/`~/Desktop`/`~/Documents`:** these are TCC-protected folders — macOS can silently block Chrome from *executing* `doi_host.py` out of one, with no prompt and no useful error. Move the whole repo somewhere else (e.g. `~/doi-extension`), update the `path` in `~/Library/Application Support/Google/Chrome/NativeMessagingHosts/com.doi_grabber.host.json` (or just re-run `./install.sh` from the new location), and fully restart Chrome. This is the most common cause if *every* native-host action fails identically (mirror health, download stats, updates, downloads — not just one feature).
+- **macOS, quarantine flag:** check `doi_host.py` doesn't have a `com.apple.quarantine` extended attribute: `xattr -l native-host/doi_host.py`. If it does, `xattr -d com.apple.quarantine native-host/doi_host.py`.
 - **Windows:** confirm `doi_host.bat`'s path in `com.doi_grabber.host.json` matches where you actually placed `native-host/`, and that either the `py` launcher or `python` is on your PATH (`py --version` or `python --version` in PowerShell).
 - Make sure you fully restarted Chrome after installing/editing the native host, not just reloaded the extension.
+- If you moved the extension's *own* folder (not just `native-host/`) to a new path, its ID changes too (unpacked extensions with no `"key"` in `manifest.json` get an ID derived from their absolute path) — you'll need to update `allowed_origins` in `com.doi_grabber.host.json` to the new ID as well.
 
 **Download runs but fails immediately:**
 - Check the Python interpreter set in Settings actually has `requests` and `beautifulsoup4` installed: `<your-python-path> -c "import requests, bs4"`.
