@@ -13,7 +13,6 @@ This is a **personal, single-machine tool** — it is not published on the Chrom
 ## Table of contents
 
 - [What it does](#what-it-does)
-- [Screenshots](#screenshots)
 - [How it's built](#how-its-built)
 - [Prerequisites](#prerequisites)
 - [Installation](#installation)
@@ -50,22 +49,6 @@ Open any academic paper's page (a journal site, a DOI resolver link, PhilPapers,
 4. If it's still unavailable, offers **fallbacks**: search Google for the title + author, search Google Scholar for the author, or (for SAGE papers specifically) jump straight to SAGE's own PDF viewer in case it's actually open-access.
 
 On top of the single-paper flow, it also has full pages for **bulk-downloading** an author's entire output, an entire journal issue, or an entire journal; browsing a paper's **references** and **citations**; finding **similar/related papers**; and **watching** a journal or author for new releases.
-
-## Screenshots
-
-> Screenshots aren't included in this README yet — add your own here. Suggested shots:
->
-> - `docs/screenshots/popup.png` — the toolbar popup on a detected paper
-> - `docs/screenshots/popup-panels.png` — References/Cited By/Related Papers panels open
-> - `docs/screenshots/options.png` — the Settings page
-> - `docs/screenshots/author.png` — the "Download All Works" author page with the year histogram
-> - `docs/screenshots/collaborators.png` — the Common Collaborators network graph
-> - `docs/screenshots/journal-download.png` — the whole-journal batch download page
->
-> Once added, reference them like:
-> ```markdown
-> ![Popup](docs/screenshots/popup.png)
-> ```
 
 ## How it's built
 
