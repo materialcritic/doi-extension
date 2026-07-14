@@ -166,8 +166,7 @@ Open the extension's **Settings** page (right-click the toolbar icon → Options
 | **Script path** | Full path to `scihub_download.py` (in this repo: `native-host/scihub_download.py`). Also overridable at runtime. |
 | **Sci-Hub mirrors** | One URL per line. Leave blank to use the script's built-in mirror list. |
 
-A couple of things are **not** exposed in the UI and are hardcoded directly in `scihub_download.py` instead:
-- `UNPAYWALL_EMAIL` — Unpaywall's API asks for a real contact address in every request per their usage policy; replace the placeholder with your own if you're running this yourself.
+One thing is **not** exposed in the UI and is hardcoded directly in `scihub_download.py` instead: `UNPAYWALL_EMAIL` — Unpaywall's API asks for a real contact address in every request per their usage policy; replace the placeholder with your own if you're running this yourself.
 
 ### 4. Try it
 
