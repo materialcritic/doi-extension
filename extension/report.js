@@ -1,6 +1,4 @@
-// TODO before this ships anywhere beyond personal use: point this at the
-// real GitHub repo ("owner/repo") once one exists.
-const GITHUB_REPO = "YOUR_GITHUB_USERNAME/doi-extension";
+const GITHUB_REPO = "materialcritic/doi-extension";
 const FALLBACK_EMAIL = "111hui@protonmail.com";
 
 let reportType = "bug";
