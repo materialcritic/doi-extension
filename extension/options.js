@@ -602,3 +602,97 @@ btnExportBackup.addEventListener("click", async () => {
 document.getElementById("btn-report-bug").addEventListener("click", () => {
   chrome.tabs.create({ url: chrome.runtime.getURL("report.html") });
 });
+
+// Updates card — "Check for Updates" runs a fresh git-fetch-based check
+// (doesn't just trust the 12-hour background cache, since the user clicked
+// specifically to get a current answer); "Update Now" runs a fast-forward
+// git pull through the native host and only appears once a check finds
+// something behind origin.
+const updateStatusEl = document.getElementById("update-status");
+const updateChangelogWrapEl = document.getElementById("update-changelog-wrap");
+const updateChangelogEl = document.getElementById("update-changelog");
+const btnCheckUpdate = document.getElementById("btn-check-update");
+const btnApplyUpdate = document.getElementById("btn-apply-update");
+const updateActionStatusEl = document.getElementById("update-action-status");
+
+function renderUpdateStatus(resp) {
+  if (!resp || !resp.success) {
+    updateStatusEl.innerHTML = `<div class="hint">Couldn't check for updates: ${
+      (resp && resp.error) || "native host unreachable"
+    }</div>`;
+    updateChangelogWrapEl.style.display = "none";
+    btnApplyUpdate.style.display = "none";
+    return;
+  }
+
+  if (resp.behindBy > 0) {
+    updateStatusEl.innerHTML = `<div class="hint">${resp.behindBy} update${
+      resp.behindBy === 1 ? "" : "s"
+    } available (currently at <code>${resp.localSha}</code>).</div>`;
+    updateChangelogEl.innerHTML = resp.commits.map((c) => `<div class="row">${escapeHtmlUpdate(c)}</div>`).join("");
+    updateChangelogWrapEl.style.display = "";
+    btnApplyUpdate.style.display = "";
+  } else {
+    updateStatusEl.innerHTML = `<div class="hint">Up to date (<code>${resp.localSha}</code>).</div>`;
+    updateChangelogWrapEl.style.display = "none";
+    btnApplyUpdate.style.display = "none";
+  }
+
+  chrome.storage.local.set({
+    updateInfo: {
+      behindBy: resp.behindBy,
+      commits: resp.commits,
+      localSha: resp.localSha,
+      checkedAt: Date.now(),
+    },
+  });
+}
+
+function escapeHtmlUpdate(s) {
+  return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+}
+
+function checkForUpdate() {
+  btnCheckUpdate.disabled = true;
+  updateStatusEl.innerHTML = skeletonRowsHtml(1, "60%", "0%");
+  chrome.runtime.sendMessage({ action: "checkForUpdate" }, (resp) => {
+    btnCheckUpdate.disabled = false;
+    renderUpdateStatus(resp);
+  });
+}
+
+btnCheckUpdate.addEventListener("click", checkForUpdate);
+
+btnApplyUpdate.addEventListener("click", () => {
+  btnApplyUpdate.disabled = true;
+  btnCheckUpdate.disabled = true;
+  updateActionStatusEl.className = "";
+  updateActionStatusEl.textContent = "Updating…";
+
+  chrome.runtime.sendMessage({ action: "applyUpdate" }, (resp) => {
+    btnCheckUpdate.disabled = false;
+
+    if (!resp || !resp.success) {
+      updateActionStatusEl.className = "error";
+      updateActionStatusEl.textContent = "Update failed: " + ((resp && resp.error) || "unknown error");
+      btnApplyUpdate.disabled = false;
+      return;
+    }
+
+    updateActionStatusEl.className = "ok";
+    updateActionStatusEl.textContent = resp.nativeHostChanged
+      ? "Updated ✓ — fully restart Chrome (not just reload the extension) to pick up native-host changes."
+      : "Updated ✓ — reload the extension to pick up the changes.";
+    btnApplyUpdate.style.display = "none";
+
+    // Delay so the status message (and the restart-Chrome note, when it
+    // applies) is actually readable before the extension reload blanks the page.
+    setTimeout(() => chrome.runtime.reload(), 2500);
+  });
+});
+
+if (location.hash === "#updates") {
+  document.getElementById("updates").scrollIntoView();
+}
+
+checkForUpdate();

@@ -441,6 +441,19 @@
       padding: 4px 8px;
     }
 
+    #update-hint {
+      display: none;
+      text-align: center;
+      font-size: 11px;
+      color: var(--text-dim2);
+      text-decoration: underline dotted;
+      cursor: pointer;
+      margin-top: 2px;
+    }
+    #update-hint.visible {
+      display: block;
+    }
+
     .ref-title {
       font-size: 11px;
       color: var(--text);
@@ -632,6 +645,8 @@
   <button id="btn-search" disabled>Search Google Instead</button>
 
   <div id="status"></div>
+
+  <div id="update-hint"></div>
 
   <div id="log"></div>
 

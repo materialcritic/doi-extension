@@ -17,6 +17,13 @@ const WATCHLIST_PERIOD_MINUTES = 360; // 6 hours
 // for that author's most recent Crossref work and notifies on a new DOI.
 const AUTHOR_WATCHLIST_ALARM = "checkAuthorWatchlist";
 
+// Self-update: periodically asks the native host to `git fetch` the repo
+// checkout it's running from and reports how many commits behind origin it
+// is. Result is cached in chrome.storage.local so the popup can show a
+// lightweight "Update available" hint without its own native-messaging round trip.
+const UPDATE_CHECK_ALARM = "checkForUpdate";
+const UPDATE_CHECK_PERIOD_MINUTES = 720; // 12 hours
+
 // notifId -> issue params, so a click can open the right issue page.
 // Not persisted — a service worker restart just means old notifications
 // silently stop being clickable, which is an acceptable tradeoff here.
@@ -27,6 +34,7 @@ const GRAB_DOI_MENU_ID = "doi-grabber-grab-selection";
 chrome.runtime.onInstalled.addListener(() => {
   chrome.alarms.create(WATCHLIST_ALARM, { periodInMinutes: WATCHLIST_PERIOD_MINUTES });
   chrome.alarms.create(AUTHOR_WATCHLIST_ALARM, { periodInMinutes: WATCHLIST_PERIOD_MINUTES });
+  chrome.alarms.create(UPDATE_CHECK_ALARM, { periodInMinutes: UPDATE_CHECK_PERIOD_MINUTES });
 
   // Context menu items persist across service-worker restarts once created
   // by the browser — only (re-)create on install/update, not on every
@@ -38,11 +46,39 @@ chrome.runtime.onInstalled.addListener(() => {
       contexts: ["selection"],
     });
   });
+
+  refreshUpdateCache();
 });
 chrome.runtime.onStartup.addListener(() => {
   chrome.alarms.create(WATCHLIST_ALARM, { periodInMinutes: WATCHLIST_PERIOD_MINUTES });
   chrome.alarms.create(AUTHOR_WATCHLIST_ALARM, { periodInMinutes: WATCHLIST_PERIOD_MINUTES });
+  chrome.alarms.create(UPDATE_CHECK_ALARM, { periodInMinutes: UPDATE_CHECK_PERIOD_MINUTES });
+
+  refreshUpdateCache();
 });
+
+// Runs a check_for_update native-host round trip and caches the result in
+// chrome.storage.local (not .sync — this is per-machine checkout state, same
+// reasoning as potdNonce/potdHistory) for the popup's lightweight hint.
+function refreshUpdateCache() {
+  const port = chrome.runtime.connectNative(NATIVE_HOST);
+  port.onMessage.addListener((message) => {
+    if (message.type === "progress") return;
+    if (message.status === "ok") {
+      chrome.storage.local.set({
+        updateInfo: {
+          behindBy: message.behind_by,
+          commits: message.commits,
+          localSha: message.local_sha,
+          checkedAt: Date.now(),
+        },
+      });
+    }
+    port.disconnect();
+  });
+  port.onDisconnect.addListener(() => {});
+  port.postMessage({ action: "check_for_update" });
+}
 
 // Loosely matches a DOI anywhere in arbitrary selected text — a "10.xxxx/..."
 // token, optionally prefixed with "doi:" or wrapped in a doi.org URL.
@@ -77,6 +113,7 @@ chrome.contextMenus.onClicked.addListener((info, tab) => {
 chrome.alarms.onAlarm.addListener((alarm) => {
   if (alarm.name === WATCHLIST_ALARM) checkWatchlist();
   if (alarm.name === AUTHOR_WATCHLIST_ALARM) checkAuthorWatchlist();
+  if (alarm.name === UPDATE_CHECK_ALARM) refreshUpdateCache();
 });
 
 chrome.notifications.onClicked.addListener((notifId) => {
@@ -1345,6 +1382,53 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     });
 
     port.postMessage({ action: "reset_mirror_health", url: request.url });
+    return true;
+  }
+
+  if (request.action === "checkForUpdate") {
+    const port = chrome.runtime.connectNative(NATIVE_HOST);
+
+    port.onMessage.addListener((message) => {
+      if (message.type === "progress") return;
+      sendResponse({
+        success: message.status === "ok",
+        behindBy: message.behind_by,
+        commits: message.commits,
+        localSha: message.local_sha,
+        error: message.detail,
+      });
+      port.disconnect();
+    });
+
+    port.onDisconnect.addListener(() => {
+      const err = chrome.runtime.lastError;
+      if (err) sendResponse({ success: false, error: err.message });
+    });
+
+    port.postMessage({ action: "check_for_update" });
+    return true;
+  }
+
+  if (request.action === "applyUpdate") {
+    const port = chrome.runtime.connectNative(NATIVE_HOST);
+
+    port.onMessage.addListener((message) => {
+      if (message.type === "progress") return;
+      sendResponse({
+        success: message.status === "ok",
+        output: message.output,
+        nativeHostChanged: message.native_host_changed,
+        error: message.detail,
+      });
+      port.disconnect();
+    });
+
+    port.onDisconnect.addListener(() => {
+      const err = chrome.runtime.lastError;
+      if (err) sendResponse({ success: false, error: err.message });
+    });
+
+    port.postMessage({ action: "apply_update" });
     return true;
   }
 

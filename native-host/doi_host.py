@@ -36,6 +36,9 @@ MIRROR_FAIL_THRESHOLD = 3
 MIRROR_COOLDOWN_MINUTES = 10
 MIRROR_HEALTH_MAX_AGE_DAYS = 4
 DOWNLOAD_LOG_PATH = os.path.join(SCRIPT_DIR, "download_log.txt")
+# Self-update reads/pulls the git repo this host lives in (native-host/ is a
+# subfolder of the repo root, e.g. a clone of github.com/materialcritic/doi-extension).
+REPO_DIR = os.path.dirname(SCRIPT_DIR)
 # ─────────────────────────────────────────────────────────────────────────────
 
 
@@ -214,6 +217,73 @@ def main():
             "download_log": download_log,
             "mirror_health": mirror_health,
         })
+        return
+
+    if message.get("action") == "check_for_update":
+        # Settings' "Updates" card — reports how far the local checkout is
+        # behind origin, plus the commit subjects that would land, without
+        # changing anything on disk (git fetch only touches remote-tracking refs).
+        try:
+            subprocess.run(
+                ["git", "fetch", "--quiet", "origin"],
+                cwd=REPO_DIR, check=True, capture_output=True, text=True, timeout=30,
+            )
+            branch = subprocess.run(
+                ["git", "rev-parse", "--abbrev-ref", "HEAD"],
+                cwd=REPO_DIR, check=True, capture_output=True, text=True,
+            ).stdout.strip()
+            log = subprocess.run(
+                ["git", "log", "--oneline", f"HEAD..origin/{branch}"],
+                cwd=REPO_DIR, check=True, capture_output=True, text=True,
+            ).stdout.strip()
+            commits = [line.split(" ", 1)[1] for line in log.splitlines() if line]
+            local_sha = subprocess.run(
+                ["git", "rev-parse", "--short", "HEAD"],
+                cwd=REPO_DIR, check=True, capture_output=True, text=True,
+            ).stdout.strip()
+            send_message({
+                "type": "result", "status": "ok",
+                "behind_by": len(commits),
+                "commits": commits,
+                "local_sha": local_sha,
+            })
+        except subprocess.CalledProcessError as e:
+            send_message({"type": "result", "status": "error", "detail": (e.stderr or str(e)).strip()})
+        except Exception as e:
+            send_message({"type": "result", "status": "error", "detail": str(e)})
+        return
+
+    if message.get("action") == "apply_update":
+        # Fast-forward pull only — this host is running out of REPO_DIR right
+        # now, so a merge/rebase mid-flight could leave a half-updated
+        # process behind; a clean fast-forward is the safe case and the only
+        # one Settings' "Update Now" button offers.
+        try:
+            status = subprocess.run(
+                ["git", "status", "--porcelain"],
+                cwd=REPO_DIR, check=True, capture_output=True, text=True,
+            ).stdout.strip()
+            if status:
+                send_message({
+                    "type": "result", "status": "error",
+                    "detail": "Local changes exist in the repo checkout — resolve or stash them before updating.",
+                })
+                return
+
+            pull = subprocess.run(
+                ["git", "pull", "--ff-only"],
+                cwd=REPO_DIR, check=True, capture_output=True, text=True, timeout=60,
+            )
+            native_host_changed = "native-host/" in pull.stdout
+            send_message({
+                "type": "result", "status": "ok",
+                "output": pull.stdout.strip(),
+                "native_host_changed": native_host_changed,
+            })
+        except subprocess.CalledProcessError as e:
+            send_message({"type": "result", "status": "error", "detail": (e.stderr or str(e)).strip()})
+        except Exception as e:
+            send_message({"type": "result", "status": "error", "detail": str(e)})
         return
 
     if message.get("action") == "recent_downloads":

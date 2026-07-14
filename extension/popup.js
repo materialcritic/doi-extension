@@ -647,5 +647,20 @@ document.addEventListener("keydown", (e) => {
   }
 });
 
+// Lightweight "Update available" hint — reads the cache background.js keeps
+// fresh via a 12-hour alarm rather than doing its own native-messaging round
+// trip on every popup open. Clicking opens Settings' Updates card.
+const updateHintEl = document.getElementById("update-hint");
+chrome.storage.local.get(["updateInfo"], ({ updateInfo }) => {
+  if (updateInfo && updateInfo.behindBy > 0) {
+    updateHintEl.textContent =
+      updateInfo.behindBy === 1 ? "Update available" : `Update available (${updateInfo.behindBy} changes)`;
+    updateHintEl.classList.add("visible");
+  }
+});
+updateHintEl.addEventListener("click", () => {
+  chrome.tabs.create({ url: chrome.runtime.getURL("options.html") + "#updates" });
+});
+
 // Run on popup open
 scanPage();
