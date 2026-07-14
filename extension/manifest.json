@@ -1,0 +1,69 @@
+{
+  "manifest_version": 3,
+  "name": "DOI Grabber",
+  "version": "1.0",
+  "description": "Detects DOIs on academic pages and sends them to your local Python script via Native Messaging.",
+  "permissions": [
+    "activeTab",
+    "scripting",
+    "nativeMessaging",
+    "storage",
+    "notifications",
+    "alarms",
+    "contextMenus"
+  ],
+  "host_permissions": [
+    "https://api.crossref.org/*",
+    "https://api.semanticscholar.org/*",
+    "https://pub.orcid.org/*",
+    "https://www.gravatar.com/*"
+  ],
+  "options_page": "options.html",
+  "content_scripts": [
+    {
+      "matches": ["http://*/*", "https://*/*"],
+      "js": ["content.js"],
+      "run_at": "document_idle"
+    },
+    {
+      "matches": [
+        "*://sci-hub.se/*",
+        "*://sci-hub.st/*",
+        "*://sci-hub.ru/*",
+        "*://sci-hub.ee/*",
+        "*://sci-hub.shop/*",
+        "*://sci-hub.vg/*",
+        "*://sci-hub.red/*",
+        "*://sci-hub.su/*"
+      ],
+      "js": ["scihub-fullscreen.js"],
+      "run_at": "document_idle"
+    }
+  ],
+  "action": {
+    "default_popup": "popup.html",
+    "default_icon": {
+      "16": "icons/icon16.png",
+      "48": "icons/icon48.png",
+      "128": "icons/icon128.png"
+    }
+  },
+  "icons": {
+    "16": "icons/icon16.png",
+    "48": "icons/icon48.png",
+    "128": "icons/icon128.png"
+  },
+  "background": {
+    "service_worker": "background.js"
+  },
+  "commands": {
+    "download-current": {
+      "suggested_key": { "default": "Alt+D" },
+      "description": "Download the current paper (if available on Sci-Hub)"
+    },
+    "search-google-current": {
+      "suggested_key": { "default": "Alt+F" },
+      "description": "Search Google for the current paper (if unavailable on Sci-Hub)"
+    }
+  }
+}

@@ -1,0 +1,641 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>DOI Grabber</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+
+    :root {
+      --bg: #1e1e1e;
+      --bg-panel: #2a2a2a;
+      --bg-panel-alt: #262626;
+      --bg-row-hover: #303030;
+      --border: #3a3a3a;
+      --text: #e8e6e1;
+      --text-dim: #8a8781;
+      --text-dim2: #a8a49c;
+      --text-faint: #b5b1a9;
+      --btn-bg: #3a3a3a;
+      --btn-bg-hover: #484848;
+      --btn-primary-bg: #e8e6e1;
+      --btn-primary-bg-hover: #ffffff;
+      --btn-primary-text: #1e1e1e;
+      --search-bg: #8a5a2b;
+      --search-bg-hover: #a06a33;
+      --search-text: #f9f7f3;
+      --delete-bg: #c0392b;
+      --delete-bg-hover: #d8493a;
+      --delete-text: #f9f7f3;
+      --ok: #4caf78;
+      --err: #e0574a;
+      --dot: #e0574a;
+    }
+
+    :root[data-theme="parchment"] {
+      --bg: #f2ece0;
+      --bg-panel: #ffffff;
+      --bg-panel-alt: #e7ddc8;
+      --bg-row-hover: #dccdae;
+      --border: #d8cbae;
+      --text: #2a2723;
+      --text-dim: #726a5c;
+      --text-dim2: #847a68;
+      --text-faint: #847a68;
+      --btn-bg: #e7ddc8;
+      --btn-bg-hover: #dccdae;
+      --btn-primary-bg: #b4783c;
+      --btn-primary-bg-hover: #c68a4d;
+      --btn-primary-text: #ffffff;
+      --search-bg: #b4783c;
+      --search-bg-hover: #c68a4d;
+      --search-text: #ffffff;
+      --ok: #2f8f5d;
+      --err: #c0392b;
+      --dot: #c0392b;
+      --delete-bg: #c0392b;
+      --delete-bg-hover: #d8493a;
+      --delete-text: #ffffff;
+    }
+
+    :root[data-theme="slate"] {
+      --bg: #eef1f4;
+      --bg-panel: #ffffff;
+      --bg-panel-alt: #e3e8ee;
+      --bg-row-hover: #d3dae3;
+      --border: #d3dae3;
+      --text: #23282f;
+      --text-dim: #6b7280;
+      --text-dim2: #7c8794;
+      --text-faint: #7c8794;
+      --btn-bg: #e3e8ee;
+      --btn-bg-hover: #d3dae3;
+      --btn-primary-bg: #4f6d8f;
+      --btn-primary-bg-hover: #5f7fa3;
+      --btn-primary-text: #ffffff;
+      --search-bg: #4f6d8f;
+      --search-bg-hover: #5f7fa3;
+      --search-text: #ffffff;
+      --ok: #2f8f5d;
+      --err: #c0392b;
+      --dot: #c0392b;
+      --delete-bg: #c0392b;
+      --delete-bg-hover: #d8493a;
+      --delete-text: #ffffff;
+    }
+
+    :root[data-theme="sage"] {
+      --bg: #f0f2ec;
+      --bg-panel: #ffffff;
+      --bg-panel-alt: #e4e8dc;
+      --bg-row-hover: #d4dac6;
+      --border: #d4dac6;
+      --text: #262b22;
+      --text-dim: #6f7566;
+      --text-dim2: #7e8474;
+      --text-faint: #7e8474;
+      --btn-bg: #e4e8dc;
+      --btn-bg-hover: #d4dac6;
+      --btn-primary-bg: #6b8e5a;
+      --btn-primary-bg-hover: #7fa06d;
+      --btn-primary-text: #ffffff;
+      --search-bg: #6b8e5a;
+      --search-bg-hover: #7fa06d;
+      --search-text: #ffffff;
+      --ok: #2f8f5d;
+      --err: #c0392b;
+      --dot: #c0392b;
+      --delete-bg: #c0392b;
+      --delete-bg-hover: #d8493a;
+      --delete-text: #ffffff;
+    }
+
+    :root[data-theme="minimal"] {
+      --bg: #ffffff;
+      --bg-panel: #f7f7f7;
+      --bg-panel-alt: #f0f0f0;
+      --bg-row-hover: #e2e2e2;
+      --border: #dddddd;
+      --text: #111111;
+      --text-dim: #6e6e6e;
+      --text-dim2: #7a7a7a;
+      --text-faint: #7a7a7a;
+      --btn-bg: #f0f0f0;
+      --btn-bg-hover: #e2e2e2;
+      --btn-primary-bg: #111111;
+      --btn-primary-bg-hover: #333333;
+      --btn-primary-text: #ffffff;
+      --search-bg: #111111;
+      --search-bg-hover: #333333;
+      --search-text: #ffffff;
+      --ok: #1a7a4c;
+      --err: #b3261e;
+      --dot: #b3261e;
+      --delete-bg: #b3261e;
+      --delete-bg-hover: #cc3324;
+      --delete-text: #ffffff;
+    }
+
+    :root[data-theme="carrot"] {
+      --bg: #fdf3e7;
+      --bg-panel: #ffffff;
+      --bg-panel-alt: #fbe4c4;
+      --bg-row-hover: #f5d4a4;
+      --border: #f0c98a;
+      --text: #3a2410;
+      --text-dim: #8a6a3c;
+      --text-dim2: #9c7a48;
+      --text-faint: #9c7a48;
+      --btn-bg: #fbe4c4;
+      --btn-bg-hover: #f5d4a4;
+      --btn-primary-bg: #e8752c;
+      --btn-primary-bg-hover: #f28943;
+      --btn-primary-text: #ffffff;
+      --search-bg: #e8752c;
+      --search-bg-hover: #f28943;
+      --search-text: #ffffff;
+      --ok: #4a8f3c;
+      --err: #c0392b;
+      --dot: #c0392b;
+      --delete-bg: #c0392b;
+      --delete-bg-hover: #d8493a;
+      --delete-text: #ffffff;
+    }
+
+    body {
+      width: 260px;
+      font-family: "Georgia", serif;
+      background: var(--bg);
+      color: var(--text);
+      padding: 14px;
+    }
+
+    header {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      margin-bottom: 12px;
+      border-bottom: 1px solid var(--border);
+      padding-bottom: 8px;
+    }
+
+    header .spacer { flex: 1; }
+
+    #btn-settings, #btn-theme-toggle {
+      background: none;
+      border: none;
+      color: var(--text-dim);
+      font-size: 13px;
+      cursor: pointer;
+      width: 22px;
+      height: 22px;
+      flex-shrink: 0;
+      border-radius: 5px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 0;
+      line-height: 1;
+    }
+
+    #btn-settings:hover, #btn-theme-toggle:hover {
+      color: var(--text);
+      background: var(--btn-bg);
+    }
+
+    header .dot {
+      width: 6px; height: 6px;
+      border-radius: 50%;
+      background: var(--dot);
+      flex-shrink: 0;
+      align-self: center;
+    }
+
+    #doi-box {
+      background: var(--bg-panel);
+      border: 1px solid var(--border);
+      border-radius: 4px;
+      padding: 9px 11px;
+      font-family: "Courier New", monospace;
+      font-size: 12px;
+      color: var(--text);
+      word-break: break-all;
+      line-height: 1.4;
+      min-height: 30px;
+      display: flex;
+      align-items: center;
+    }
+
+    #doi-box.empty {
+      color: var(--text-dim);
+      font-family: "Georgia", serif;
+      font-style: italic;
+      font-size: 13px;
+    }
+
+    #doi-box.error {
+      color: var(--err);
+      font-family: "Georgia", serif;
+      font-style: italic;
+      font-size: 13px;
+    }
+
+    .actions {
+      display: flex;
+      gap: 6px;
+      margin-top: 10px;
+    }
+
+    button {
+      flex: 1;
+      padding: 7px 10px;
+      border: none;
+      border-radius: 3px;
+      font-size: 12px;
+      cursor: pointer;
+      font-family: "Georgia", serif;
+      transition: background 0.15s, opacity 0.15s;
+    }
+
+    button:disabled {
+      opacity: 0.4;
+      cursor: not-allowed;
+    }
+
+    #btn-run {
+      background: var(--btn-primary-bg);
+      color: var(--btn-primary-text);
+    }
+
+    #btn-run:hover:not(:disabled) {
+      background: var(--btn-primary-bg-hover);
+    }
+
+    #btn-copy {
+      background: var(--btn-bg);
+      color: var(--text);
+    }
+
+    #btn-copy:hover:not(:disabled) {
+      background: var(--btn-bg-hover);
+    }
+
+    #btn-link, #btn-view, #btn-author, #btn-download-all, #btn-collaborators, #btn-issue {
+      width: 100%;
+      margin-top: 6px;
+      background: var(--btn-bg);
+      color: var(--text);
+    }
+
+    #btn-link:hover:not(:disabled), #btn-view:hover:not(:disabled), #btn-author:hover:not(:disabled), #btn-download-all:hover:not(:disabled), #btn-collaborators:hover:not(:disabled), #btn-issue:hover:not(:disabled) {
+      background: var(--btn-bg-hover);
+    }
+
+    #btn-qr {
+      width: 100%;
+      margin-top: 6px;
+      background: var(--btn-bg);
+      color: var(--text);
+    }
+
+    #btn-qr:hover:not(:disabled) {
+      background: var(--btn-bg-hover);
+    }
+
+    #qr-panel {
+      display: none;
+      margin-top: 8px;
+      text-align: center;
+    }
+
+    #qr-panel.visible { display: block; }
+
+    /* Themed frame around the code — keeps the code itself pure black-on-
+       white (always scannable, regardless of theme) while still feeling
+       like part of the app instead of a stark white block. */
+    #qr-frame {
+      display: inline-block;
+      background: var(--bg-panel);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 10px;
+    }
+
+    #qr-code {
+      background: #fff;
+      display: inline-block;
+      padding: 8px;
+      border-radius: 4px;
+      line-height: 0;
+    }
+
+    #qr-code svg {
+      width: 160px;
+      height: 160px;
+      display: block;
+    }
+
+    #qr-panel .hint {
+      margin-top: 6px;
+      font-size: 10.5px;
+      color: var(--text-dim);
+      font-style: italic;
+    }
+
+    #btn-references {
+      width: 100%;
+      margin-top: 6px;
+      background: var(--btn-bg);
+      color: var(--text);
+    }
+
+    #btn-references:hover:not(:disabled) {
+      background: var(--btn-bg-hover);
+    }
+
+    #references-panel {
+      display: none;
+      margin-top: 6px;
+    }
+
+    #references-panel.visible { display: block; }
+
+    #references-list {
+      max-height: 140px;
+      overflow-y: auto;
+      background: var(--bg-panel-alt);
+      border: 1px solid var(--border);
+      border-radius: 4px;
+      padding: 4px 8px;
+    }
+
+    .ref-row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 6px;
+      padding: 6px 4px;
+      border-bottom: 1px solid var(--border);
+      cursor: pointer;
+      border-radius: 3px;
+    }
+
+    .ref-row:last-child { border-bottom: none; }
+
+    .ref-row:hover {
+      background: var(--bg-row-hover);
+    }
+
+    #btn-cited-by {
+      width: 100%;
+      margin-top: 6px;
+      background: var(--btn-bg);
+      color: var(--text);
+    }
+
+    #btn-cited-by:hover:not(:disabled) {
+      background: var(--btn-bg-hover);
+    }
+
+    #cited-by-panel {
+      display: none;
+      margin-top: 6px;
+    }
+
+    #cited-by-panel.visible { display: block; }
+
+    #cited-by-list {
+      max-height: 140px;
+      overflow-y: auto;
+      background: var(--bg-panel-alt);
+      border: 1px solid var(--border);
+      border-radius: 4px;
+      padding: 4px 8px;
+    }
+
+    #btn-related {
+      width: 100%;
+      margin-top: 6px;
+      background: var(--btn-bg);
+      color: var(--text);
+    }
+
+    #btn-related:hover:not(:disabled) {
+      background: var(--btn-bg-hover);
+    }
+
+    #related-panel {
+      display: none;
+      margin-top: 6px;
+    }
+
+    #related-panel.visible { display: block; }
+
+    #related-list {
+      max-height: 140px;
+      overflow-y: auto;
+      background: var(--bg-panel-alt);
+      border: 1px solid var(--border);
+      border-radius: 4px;
+      padding: 4px 8px;
+    }
+
+    .ref-title {
+      font-size: 11px;
+      color: var(--text);
+      line-height: 1.35;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      display: -webkit-box;
+      -webkit-line-clamp: 2;
+      -webkit-box-orient: vertical;
+    }
+
+    .ref-open {
+      flex-shrink: 0;
+      color: var(--text-dim2);
+      font-size: 13px;
+      flex: none;
+    }
+
+    .ref-row:hover .ref-open { color: var(--text); }
+
+    #btn-reveal {
+      width: 100%;
+      margin-top: 6px;
+      background: var(--btn-bg);
+      color: var(--text);
+      display: none;
+    }
+
+    #btn-reveal.visible { display: block; }
+
+    #btn-reveal:hover:not(:disabled) {
+      background: var(--btn-bg-hover);
+    }
+
+    #btn-delete-corrupt {
+      width: 100%;
+      margin-top: 6px;
+      background: var(--delete-bg);
+      color: var(--delete-text);
+      display: none;
+    }
+
+    #btn-delete-corrupt.visible { display: block; }
+
+    #btn-delete-corrupt:hover:not(:disabled) {
+      background: var(--delete-bg-hover);
+    }
+
+    #btn-sage-pdf {
+      width: 100%;
+      margin-top: 6px;
+      background: var(--btn-bg);
+      color: var(--text);
+      display: none;
+    }
+
+    #btn-sage-pdf.visible { display: block; }
+
+    #btn-sage-pdf:hover:not(:disabled) {
+      background: var(--btn-bg-hover);
+    }
+
+    #btn-search {
+      width: 100%;
+      margin-top: 6px;
+      background: var(--search-bg);
+      color: var(--search-text);
+    }
+
+    #btn-search:hover:not(:disabled) {
+      background: var(--search-bg-hover);
+    }
+
+    #status {
+      margin-top: 8px;
+      font-size: 11.5px;
+      color: var(--text-dim2);
+      min-height: 0;
+      text-align: center;
+      font-style: italic;
+    }
+
+    #status:empty { margin-top: 0; }
+
+    #status.ok { color: var(--ok); }
+    #status.err { color: var(--err); }
+
+    #log {
+      margin-top: 8px;
+      max-height: 90px;
+      overflow-y: auto;
+      background: var(--bg-panel-alt);
+      border: 1px solid var(--border);
+      border-radius: 4px;
+      padding: 6px 8px;
+      font-family: "Courier New", monospace;
+      font-size: 10.5px;
+      color: var(--text-faint);
+      line-height: 1.4;
+      display: none;
+    }
+
+    #log.visible { display: block; }
+    #log div.err-line { color: var(--err); }
+
+    .skeleton-ref-row {
+      padding: 6px 4px;
+      border-bottom: 1px solid var(--border);
+    }
+
+    .skeleton-ref-row:last-child { border-bottom: none; }
+
+    .skeleton-bar {
+      height: 9px;
+      border-radius: 3px;
+      background: linear-gradient(90deg, var(--btn-bg) 25%, var(--border) 50%, var(--btn-bg) 75%);
+      background-size: 200% 100%;
+      animation: skeleton-pulse 1.4s ease-in-out infinite;
+    }
+
+    @keyframes skeleton-pulse {
+      0% { background-position: 200% 0; }
+      100% { background-position: -200% 0; }
+    }
+  </style>
+  <script src="theme.js"></script>
+  <script src="shortcuts.js"></script>
+</head>
+<body>
+  <header>
+    <div class="dot"></div>
+    <div class="spacer"></div>
+    <button id="btn-theme-toggle" title="Toggle theme" data-theme-icon>☀</button>
+    <button id="btn-settings" title="Settings">⚙</button>
+  </header>
+
+  <div id="doi-box" class="empty">Scanning page…</div>
+
+  <div class="actions">
+    <button id="btn-run" disabled>Download</button>
+    <button id="btn-copy" disabled>Copy DOI</button>
+  </div>
+
+  <button id="btn-link" disabled>Copy Sci-Hub Link</button>
+
+  <button id="btn-view" disabled>View on Sci-Hub</button>
+
+  <button id="btn-sage-pdf">View Sage PDF (Open Access)</button>
+
+  <button id="btn-author" disabled>More by This Author</button>
+
+  <button id="btn-download-all" disabled>Download All Works</button>
+
+  <button id="btn-collaborators" disabled>Common Collaborators</button>
+
+  <button id="btn-issue" disabled>Download This Issue</button>
+
+  <button id="btn-qr" disabled>QR Code</button>
+
+  <div id="qr-panel">
+    <div id="qr-frame">
+      <div id="qr-code"></div>
+    </div>
+    <div class="hint">Scan with a phone/tablet camera to open this article on Sci-Hub.</div>
+  </div>
+
+  <button id="btn-references" disabled>References</button>
+
+  <div id="references-panel">
+    <div id="references-list"></div>
+  </div>
+
+  <button id="btn-cited-by" disabled>Cited By</button>
+
+  <div id="cited-by-panel">
+    <div id="cited-by-list"></div>
+  </div>
+
+  <button id="btn-related" disabled>Related Papers</button>
+
+  <div id="related-panel">
+    <div id="related-list"></div>
+  </div>
+
+  <button id="btn-reveal">Reveal in Finder</button>
+
+  <button id="btn-delete-corrupt">Delete Corrupt File</button>
+
+  <button id="btn-search" disabled>Search Google Instead</button>
+
+  <div id="status"></div>
+
+  <div id="log"></div>
+
+  <script src="vendor/qrcode.js"></script>
+  <script src="popup.js"></script>
+</body>
+</html>

@@ -1,0 +1,403 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>DOI Grabber — Similar Papers</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+
+    :root {
+      --bg: #17171a;
+      --surface: #212126;
+      --surface-2: #2a2a30;
+      --surface-2-hover: #34343c;
+      --border: #34343c;
+      --text: #ece9e4;
+      --text-dim: #9d9a94;
+      --accent: #c98a4b;
+      --accent-hover: #dd9c5c;
+      --accent-text: #201406;
+      --ok: #4caf78;
+      --err: #e0574a;
+    }
+
+    :root[data-theme="parchment"] {
+      --bg: #f2ece0;
+      --surface: #ffffff;
+      --surface-2: #e7ddc8;
+      --surface-2-hover: #dccdae;
+      --border: #d8cbae;
+      --text: #2a2723;
+      --text-dim: #726a5c;
+      --accent: #b4783c;
+      --accent-hover: #c68a4d;
+      --accent-text: #ffffff;
+      --ok: #2f8f5d;
+      --err: #c0392b;
+    }
+
+    :root[data-theme="slate"] {
+      --bg: #eef1f4;
+      --surface: #ffffff;
+      --surface-2: #e3e8ee;
+      --surface-2-hover: #d3dae3;
+      --border: #d3dae3;
+      --text: #23282f;
+      --text-dim: #6b7280;
+      --accent: #4f6d8f;
+      --accent-hover: #5f7fa3;
+      --accent-text: #ffffff;
+      --ok: #2f8f5d;
+      --err: #c0392b;
+    }
+
+    :root[data-theme="sage"] {
+      --bg: #f0f2ec;
+      --surface: #ffffff;
+      --surface-2: #e4e8dc;
+      --surface-2-hover: #d4dac6;
+      --border: #d4dac6;
+      --text: #262b22;
+      --text-dim: #6f7566;
+      --accent: #6b8e5a;
+      --accent-hover: #7fa06d;
+      --accent-text: #ffffff;
+      --ok: #2f8f5d;
+      --err: #c0392b;
+    }
+
+    :root[data-theme="minimal"] {
+      --bg: #ffffff;
+      --surface: #f7f7f7;
+      --surface-2: #f0f0f0;
+      --surface-2-hover: #e2e2e2;
+      --border: #dddddd;
+      --text: #111111;
+      --text-dim: #6e6e6e;
+      --accent: #111111;
+      --accent-hover: #333333;
+      --accent-text: #ffffff;
+      --ok: #1a7a4c;
+      --err: #b3261e;
+    }
+
+    :root[data-theme="carrot"] {
+      --bg: #fdf3e7;
+      --surface: #ffffff;
+      --surface-2: #fbe4c4;
+      --surface-2-hover: #f5d4a4;
+      --border: #f0c98a;
+      --text: #3a2410;
+      --text-dim: #8a6a3c;
+      --accent: #e8752c;
+      --accent-hover: #f28943;
+      --accent-text: #ffffff;
+      --ok: #4a8f3c;
+      --err: #c0392b;
+    }
+
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      padding: 32px;
+      max-width: 760px;
+      margin: 0 auto;
+    }
+
+    header {
+      margin-bottom: 20px;
+      display: flex;
+      align-items: flex-start;
+    }
+
+    header .header-text { flex: 1; }
+
+    header h1 {
+      font-size: 20px;
+      font-weight: 600;
+    }
+
+    header p {
+      font-size: 12.5px;
+      color: var(--text-dim);
+      margin-top: 4px;
+    }
+
+    #btn-theme-toggle {
+      background: var(--surface-2);
+      border: 1px solid var(--border);
+      color: var(--text);
+      width: 36px;
+      height: 36px;
+      border-radius: 8px;
+      font-size: 13px;
+      cursor: pointer;
+      flex-shrink: 0;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 0;
+      line-height: 1;
+    }
+
+    #btn-theme-toggle:hover { background: var(--surface-2-hover); }
+
+    .toolbar {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      margin-bottom: 16px;
+      flex-wrap: wrap;
+    }
+
+    button {
+      padding: 8px 14px;
+      border: none;
+      border-radius: 8px;
+      font-size: 12.5px;
+      font-weight: 600;
+      cursor: pointer;
+      font-family: inherit;
+      background: var(--surface-2);
+      color: var(--text);
+      border: 1px solid var(--border);
+    }
+
+    button:hover:not(:disabled) { background: var(--surface-2-hover); }
+    button:disabled { opacity: 0.4; cursor: not-allowed; }
+
+    button.primary {
+      background: var(--accent);
+      color: var(--accent-text);
+      border: none;
+    }
+
+    button.primary:hover:not(:disabled) { background: var(--accent-hover); }
+
+    #sort-select {
+      padding: 8px 12px;
+      border-radius: 8px;
+      font-size: 12.5px;
+      font-family: inherit;
+      background: var(--surface-2);
+      color: var(--text);
+      border: 1px solid var(--border);
+      cursor: pointer;
+    }
+
+    #search-input {
+      padding: 8px 12px;
+      border-radius: 8px;
+      font-size: 12.5px;
+      font-family: inherit;
+      background: var(--surface-2);
+      color: var(--text);
+      border: 1px solid var(--border);
+      width: 180px;
+    }
+
+    #search-input::placeholder { color: var(--text-dim); }
+    #search-input:focus { outline: none; border-color: var(--accent); }
+
+    #progress-bar-wrap {
+      height: 6px;
+      background: var(--surface-2);
+      border-radius: 3px;
+      overflow: hidden;
+      margin-bottom: 16px;
+    }
+
+    #progress-bar {
+      height: 100%;
+      width: 0%;
+      background: var(--accent);
+      transition: width 0.2s ease;
+    }
+
+    .spacer { flex: 1; }
+
+    #status-line {
+      font-size: 12px;
+      color: var(--text-dim);
+    }
+
+    #keyword-line {
+      font-size: 12px;
+      color: var(--text-dim);
+      margin-top: 6px;
+    }
+
+    #keyword-line code {
+      background: var(--surface-2);
+      border: 1px solid var(--border);
+      border-radius: 4px;
+      padding: 1px 5px;
+      font-family: "SF Mono", "Courier New", monospace;
+    }
+
+    #list {
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      overflow: hidden;
+    }
+
+    .work-row {
+      display: flex;
+      align-items: flex-start;
+      gap: 10px;
+      padding: 12px 14px;
+      border-bottom: 1px solid var(--border);
+      background: var(--surface);
+    }
+
+    .work-row:last-child { border-bottom: none; }
+
+    .work-row.no-doi {
+      opacity: 0.5;
+    }
+
+    .work-row input[type="checkbox"] {
+      margin-top: 3px;
+      flex-shrink: 0;
+    }
+
+    .work-info {
+      flex: 1;
+      min-width: 0;
+    }
+
+    .work-title {
+      font-size: 13px;
+      line-height: 1.4;
+    }
+
+    .work-title.has-abstract {
+      cursor: help;
+      text-decoration: underline dotted;
+      text-underline-offset: 3px;
+      text-decoration-color: var(--text-dim);
+    }
+
+    #abstract-tooltip {
+      position: fixed;
+      max-width: 380px;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 10px 12px;
+      font-size: 12px;
+      line-height: 1.5;
+      color: var(--text);
+      box-shadow: 0 8px 24px rgba(0, 0, 0, 0.25);
+      z-index: 1000;
+      display: none;
+      pointer-events: none;
+    }
+
+    .work-meta {
+      font-size: 11px;
+      color: var(--text-dim);
+      margin-top: 3px;
+    }
+
+    .work-status {
+      flex-shrink: 0;
+      font-size: 11px;
+      min-width: 70px;
+      text-align: right;
+    }
+
+    .work-status.ok { color: var(--ok); }
+    .work-status.err { color: var(--err); }
+    .work-status.pending { color: var(--text-dim); }
+
+    #empty, #error, #no-matches {
+      padding: 40px 0;
+      text-align: center;
+      color: var(--text-dim);
+      font-size: 13px;
+    }
+
+    #error { color: var(--err); }
+
+    .skeleton-list {
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      overflow: hidden;
+    }
+
+    .skeleton-row {
+      padding: 12px 14px;
+      border-bottom: 1px solid var(--border);
+      background: var(--surface);
+    }
+
+    .skeleton-row:last-child { border-bottom: none; }
+
+    .skeleton-bar {
+      height: 11px;
+      border-radius: 4px;
+      background: linear-gradient(90deg, var(--surface-2) 25%, var(--border) 50%, var(--surface-2) 75%);
+      background-size: 200% 100%;
+      animation: skeleton-pulse 1.4s ease-in-out infinite;
+    }
+
+    .skeleton-bar + .skeleton-bar { margin-top: 8px; }
+
+    @keyframes skeleton-pulse {
+      0% { background-position: 200% 0; }
+      100% { background-position: -200% 0; }
+    }
+  </style>
+  <script src="theme.js"></script>
+</head>
+<body>
+  <header>
+    <div class="header-text">
+      <h1 id="search-title">Similar Papers</h1>
+      <p id="subtitle">Searching Crossref…</p>
+      <p id="keyword-line"></p>
+    </div>
+    <button id="btn-theme-toggle" title="Toggle theme" data-theme-icon>☀</button>
+  </header>
+
+  <div class="toolbar">
+    <button id="btn-select-all">Select All</button>
+    <button id="btn-select-none">Select None</button>
+    <select id="sort-select">
+      <option value="relevance">Sort: Relevance</option>
+      <option value="downloadable">Sort: Downloadable first</option>
+      <option value="citations">Sort: Most cited</option>
+    </select>
+    <input type="text" id="search-input" placeholder="Filter by title…" />
+    <div class="spacer"></div>
+    <span id="status-line"></span>
+    <button id="btn-open-folder" style="display: none;">Open Folder in Finder</button>
+    <button id="btn-retry-failed" style="display: none;">Retry Failed</button>
+    <button id="btn-download" class="primary" disabled>Download Selected</button>
+  </div>
+
+  <div id="progress-bar-wrap" style="display: none;">
+    <div id="progress-bar"></div>
+  </div>
+
+  <div id="loading">
+    <div class="skeleton-list">
+      <div class="skeleton-row"><div class="skeleton-bar" style="width: 78%;"></div><div class="skeleton-bar" style="width: 45%;"></div></div>
+      <div class="skeleton-row"><div class="skeleton-bar" style="width: 62%;"></div><div class="skeleton-bar" style="width: 38%;"></div></div>
+      <div class="skeleton-row"><div class="skeleton-bar" style="width: 84%;"></div><div class="skeleton-bar" style="width: 50%;"></div></div>
+      <div class="skeleton-row"><div class="skeleton-bar" style="width: 55%;"></div><div class="skeleton-bar" style="width: 34%;"></div></div>
+      <div class="skeleton-row"><div class="skeleton-bar" style="width: 70%;"></div><div class="skeleton-bar" style="width: 42%;"></div></div>
+    </div>
+  </div>
+  <div id="error" style="display: none;"></div>
+  <div id="empty" style="display: none;">No similar works found on Crossref.</div>
+  <div id="no-matches" style="display: none;">No works match your filter.</div>
+  <div id="list" style="display: none;"></div>
+
+  <div id="abstract-tooltip"></div>
+
+  <script src="search.js"></script>
+</body>
+</html>

@@ -1,0 +1,627 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>DOI Grabber — Settings</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+
+    :root {
+      --bg: #17171a;
+      --bg-glow: #202024;
+      --surface: #212126;
+      --surface-2: #2a2a30;
+      --surface-2-hover: #34343c;
+      --border: #34343c;
+      --text: #ece9e4;
+      --text-dim: #9d9a94;
+      --accent: #c98a4b;
+      --accent-hover: #dd9c5c;
+      --accent-text: #201406;
+      --ok: #4caf78;
+      --err: #e0574a;
+      --warn: #c9a24b;
+    }
+
+    :root[data-theme="parchment"] {
+      --bg: #f2ece0;
+      --bg-glow: #ffffff;
+      --surface: #ffffff;
+      --surface-2: #e7ddc8;
+      --surface-2-hover: #dccdae;
+      --border: #d8cbae;
+      --text: #2a2723;
+      --text-dim: #726a5c;
+      --accent: #b4783c;
+      --accent-hover: #c68a4d;
+      --accent-text: #ffffff;
+      --ok: #2f8f5d;
+      --err: #c0392b;
+      --warn: #a9812f;
+    }
+
+    :root[data-theme="slate"] {
+      --bg: #eef1f4;
+      --bg-glow: #ffffff;
+      --surface: #ffffff;
+      --surface-2: #e3e8ee;
+      --surface-2-hover: #d3dae3;
+      --border: #d3dae3;
+      --text: #23282f;
+      --text-dim: #6b7280;
+      --accent: #4f6d8f;
+      --accent-hover: #5f7fa3;
+      --accent-text: #ffffff;
+      --ok: #2f8f5d;
+      --err: #c0392b;
+      --warn: #a9812f;
+    }
+
+    :root[data-theme="sage"] {
+      --bg: #f0f2ec;
+      --bg-glow: #ffffff;
+      --surface: #ffffff;
+      --surface-2: #e4e8dc;
+      --surface-2-hover: #d4dac6;
+      --border: #d4dac6;
+      --text: #262b22;
+      --text-dim: #6f7566;
+      --accent: #6b8e5a;
+      --accent-hover: #7fa06d;
+      --accent-text: #ffffff;
+      --ok: #2f8f5d;
+      --err: #c0392b;
+      --warn: #a9812f;
+    }
+
+    :root[data-theme="minimal"] {
+      --bg: #ffffff;
+      --bg-glow: #ffffff;
+      --surface: #f7f7f7;
+      --surface-2: #f0f0f0;
+      --surface-2-hover: #e2e2e2;
+      --border: #dddddd;
+      --text: #111111;
+      --text-dim: #6e6e6e;
+      --accent: #111111;
+      --accent-hover: #333333;
+      --accent-text: #ffffff;
+      --ok: #1a7a4c;
+      --err: #b3261e;
+      --warn: #8a6d1a;
+    }
+
+    :root[data-theme="carrot"] {
+      --bg: #fdf3e7;
+      --bg-glow: #ffffff;
+      --surface: #ffffff;
+      --surface-2: #fbe4c4;
+      --surface-2-hover: #f5d4a4;
+      --border: #f0c98a;
+      --text: #3a2410;
+      --text-dim: #8a6a3c;
+      --accent: #e8752c;
+      --accent-hover: #f28943;
+      --accent-text: #ffffff;
+      --ok: #4a8f3c;
+      --err: #c0392b;
+      --warn: #b4781e;
+    }
+
+    html, body {
+      min-height: 100%;
+    }
+
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
+      background: radial-gradient(circle at 50% 0%, var(--bg-glow) 0%, var(--bg) 55%);
+      color: var(--text);
+      display: flex;
+      justify-content: center;
+      padding: 48px 24px 80px;
+    }
+
+    .page {
+      width: 100%;
+      max-width: 640px;
+    }
+
+    .page-header {
+      display: flex;
+      align-items: center;
+      gap: 14px;
+      margin-bottom: 32px;
+    }
+
+    .page-header h1 {
+      font-size: 20px;
+      font-weight: 600;
+      letter-spacing: -0.01em;
+    }
+
+    .page-header p {
+      font-size: 12.5px;
+      color: var(--text-dim);
+      margin-top: 2px;
+    }
+
+    .card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 14px;
+      padding: 26px 28px;
+      margin-bottom: 22px;
+      box-shadow: 0 1px 0 rgba(255,255,255,0.02) inset, 0 8px 24px rgba(0,0,0,0.18);
+    }
+
+    .card h2 {
+      font-size: 13px;
+      font-weight: 600;
+      letter-spacing: 0.06em;
+      text-transform: uppercase;
+      color: var(--accent);
+      margin-bottom: 20px;
+    }
+
+    label {
+      display: block;
+      font-size: 13px;
+      font-weight: 500;
+      color: var(--text);
+      margin-bottom: 7px;
+    }
+
+    .field {
+      margin-bottom: 20px;
+    }
+
+    .field:last-child {
+      margin-bottom: 0;
+    }
+
+    .hint {
+      font-size: 11.5px;
+      color: var(--text-dim);
+      margin-top: 6px;
+    }
+
+    input[type="text"], textarea, select {
+      width: 100%;
+      background: var(--surface-2);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 10px 12px;
+      font-family: "SF Mono", "Courier New", monospace;
+      font-size: 12.5px;
+      color: var(--text);
+      transition: border-color 0.15s;
+    }
+
+    select {
+      font-family: inherit;
+      cursor: pointer;
+    }
+
+    textarea {
+      resize: vertical;
+      min-height: 70px;
+      line-height: 1.5;
+    }
+
+    input:focus, textarea:focus {
+      outline: none;
+      border-color: var(--accent);
+    }
+
+    .actions {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      margin-top: 22px;
+      flex-wrap: wrap;
+    }
+
+    button {
+      padding: 9px 16px;
+      border: none;
+      border-radius: 8px;
+      font-size: 12.5px;
+      font-weight: 600;
+      cursor: pointer;
+      font-family: inherit;
+      background: var(--accent);
+      color: var(--accent-text);
+      transition: background 0.15s, transform 0.1s;
+    }
+
+    button:hover { background: var(--accent-hover); }
+    button:active { transform: scale(0.98); }
+
+    button.secondary {
+      background: var(--surface-2);
+      color: var(--text);
+      border: 1px solid var(--border);
+    }
+
+    button.secondary:hover { background: var(--surface-2-hover); }
+
+    #saved {
+      font-size: 12px;
+      color: var(--ok);
+      opacity: 0;
+      transition: opacity 0.2s;
+    }
+
+    #saved.visible { opacity: 1; }
+
+    .row {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding: 10px 0;
+      border-bottom: 1px solid var(--border);
+      font-size: 12.5px;
+    }
+
+    .row:last-child { border-bottom: none; }
+
+    .row .row-label {
+      color: var(--text);
+    }
+
+    .row .row-value {
+      font-family: "SF Mono", "Courier New", monospace;
+      color: var(--text-dim);
+    }
+
+    .row-remove {
+      background: none;
+      border: none;
+      color: var(--text-dim);
+      font-size: 15px;
+      cursor: pointer;
+      padding: 0 0 0 12px;
+      line-height: 1;
+    }
+
+    .row-remove:hover { color: var(--err); }
+
+    .potd-title {
+      font-size: 13.5px;
+      line-height: 1.5;
+      color: var(--text);
+      margin-bottom: 4px;
+    }
+
+    .potd-meta {
+      font-size: 11.5px;
+      color: var(--text-dim);
+      font-family: "SF Mono", "Courier New", monospace;
+      margin-bottom: 14px;
+    }
+
+    .potd-abstract {
+      font-size: 12.5px;
+      line-height: 1.55;
+      color: var(--text-dim);
+      background: var(--surface-2);
+      border-radius: 8px;
+      padding: 12px 14px;
+      margin-bottom: 14px;
+    }
+
+    .potd-actions {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      margin-bottom: 14px;
+    }
+
+    a.potd-history-row {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      padding: 9px 0;
+      border-bottom: 1px solid var(--border);
+      font-size: 12px;
+      text-decoration: none;
+      color: inherit;
+    }
+
+    a.potd-history-row:last-child { border-bottom: none; }
+    a.potd-history-row:hover .potd-history-title { color: var(--accent); }
+
+    .potd-history-date {
+      flex-shrink: 0;
+      font-family: "SF Mono", "Courier New", monospace;
+      color: var(--text-dim);
+      font-size: 11px;
+    }
+
+    .potd-history-title {
+      flex: 1;
+      min-width: 0;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .skeleton-row {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding: 10px 0;
+      border-bottom: 1px solid var(--border);
+    }
+
+    .skeleton-row:last-child { border-bottom: none; }
+
+    .skeleton-bar {
+      height: 11px;
+      border-radius: 4px;
+      background: linear-gradient(90deg, var(--surface-2) 25%, var(--border) 50%, var(--surface-2) 75%);
+      background-size: 200% 100%;
+      animation: skeleton-pulse 1.4s ease-in-out infinite;
+    }
+
+    @keyframes skeleton-pulse {
+      0% { background-position: 200% 0; }
+      100% { background-position: -200% 0; }
+    }
+
+    .key-badge {
+      font-family: "SF Mono", "Courier New", monospace;
+      font-size: 11.5px;
+      background: var(--surface-2);
+      border: 1px solid var(--border);
+      border-radius: 5px;
+      padding: 3px 8px;
+      color: var(--text);
+      min-width: 20px;
+      text-align: center;
+    }
+
+    .row-right {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .row-right button {
+      padding: 5px 10px;
+      font-size: 11.5px;
+    }
+
+    a.btn-secondary {
+      display: inline-block;
+      padding: 9px 16px;
+      border-radius: 8px;
+      font-size: 12.5px;
+      font-weight: 600;
+      cursor: pointer;
+      font-family: inherit;
+      background: var(--surface-2);
+      color: var(--text);
+      border: 1px solid var(--border);
+      text-decoration: none;
+      transition: background 0.15s, transform 0.1s;
+    }
+
+    a.btn-secondary:hover { background: var(--surface-2-hover); }
+    a.btn-secondary:active { transform: scale(0.98); }
+
+    #export-status {
+      font-size: 12px;
+      color: var(--text-dim);
+    }
+
+    #export-status.ok { color: var(--ok); }
+    #export-status.error { color: var(--err); }
+  </style>
+  <script src="theme.js"></script>
+  <script src="shortcuts.js"></script>
+  <script src="vendor/zipwriter.js"></script>
+</head>
+<body>
+  <div class="page">
+    <div class="page-header">
+      <div>
+        <h1>DOI Grabber</h1>
+        <p>Settings, shortcuts, and diagnostics</p>
+      </div>
+    </div>
+
+    <section class="card">
+      <h2>Appearance</h2>
+
+      <div class="field">
+        <label for="theme-select">Color theme</label>
+        <select id="theme-select" data-theme-select>
+          <option value="dark">Dark</option>
+          <option value="parchment">Warm Parchment</option>
+          <option value="slate">Cool Slate</option>
+          <option value="sage">Soft Sage</option>
+          <option value="minimal">Pure Minimal</option>
+          <option value="carrot">Carrot</option>
+        </select>
+      </div>
+    </section>
+
+    <section class="card">
+      <h2>Connection</h2>
+
+      <div class="field">
+        <label for="output-dir">Output folder</label>
+        <input type="text" id="output-dir" placeholder="/Users/you/Downloads/papers" />
+        <div class="hint">Where downloaded PDFs are saved. Leave blank to use the script's built-in default.</div>
+      </div>
+
+      <div class="field">
+        <label for="python-bin">Python interpreter path</label>
+        <input type="text" id="python-bin" placeholder="/opt/homebrew/bin/python3" />
+        <div class="hint">Full path to the python3 that has your script's dependencies installed (e.g. requests).</div>
+      </div>
+
+      <div class="field">
+        <label for="script-path">Script path</label>
+        <input type="text" id="script-path" placeholder="/Users/you/bin/scihub_download.py" />
+        <div class="hint">Full path to the Python script that processes the DOI.</div>
+      </div>
+
+      <div class="field">
+        <label for="mirrors">Sci-Hub mirrors (one per line)</label>
+        <textarea id="mirrors" placeholder="https://sci-hub.se&#10;https://sci-hub.st"></textarea>
+        <div class="hint">Leave blank to use the script's built-in mirror list.</div>
+      </div>
+
+      <div class="actions">
+        <button id="btn-save">Save</button>
+        <button id="btn-reset" class="secondary">Reset to defaults</button>
+        <span id="saved">Saved ✓</span>
+      </div>
+    </section>
+
+    <section class="card">
+      <h2>Keyboard Shortcuts</h2>
+
+      <div class="field" id="shortcuts-list">
+        <div class="hint">Loading current bindings…</div>
+      </div>
+
+      <div class="hint">
+        Chrome only allows shortcuts to be remapped from its own Shortcuts page — not from here.
+      </div>
+
+      <div class="actions">
+        <button id="btn-open-shortcuts" class="secondary">Open Chrome Shortcuts to Remap</button>
+      </div>
+    </section>
+
+    <section class="card">
+      <h2>Popup Shortcuts</h2>
+
+      <div class="field" id="popup-shortcuts-list">
+        <div class="hint">Loading popup shortcuts…</div>
+      </div>
+
+      <div class="hint">
+        Single-key shortcuts for every popup button — active only while the popup itself has focus (unlike Alt+D/Alt+F
+        above, which work anywhere on the page). Click "Change" and press a key to reassign; assigning a key already in
+        use moves it off the other action instead of double-binding it.
+      </div>
+
+      <div class="actions">
+        <button id="btn-reset-popup-shortcuts" class="secondary">Reset to Defaults</button>
+      </div>
+    </section>
+
+    <section class="card">
+      <h2>Journal Watchlist</h2>
+
+      <div class="field" id="watchlist-list">
+        <div class="skeleton-row"><div class="skeleton-bar" style="width: 50%;"></div><div class="skeleton-bar" style="width: 12%;"></div></div>
+        <div class="skeleton-row"><div class="skeleton-bar" style="width: 50%;"></div><div class="skeleton-bar" style="width: 12%;"></div></div>
+      </div>
+
+      <div class="hint">
+        Subscribe to a journal from the "Watch This Journal" button on its Download-This-Issue page. Checked
+        automatically every 6 hours in the background; when a new issue appears you'll get a notification you can
+        click to open its download page.
+      </div>
+
+      <div class="actions">
+        <button id="btn-check-watchlist" class="secondary">Check Now</button>
+      </div>
+    </section>
+
+    <section class="card">
+      <h2>Author Watchlist</h2>
+
+      <div class="field" id="author-watchlist-list">
+        <div class="skeleton-row"><div class="skeleton-bar" style="width: 50%;"></div><div class="skeleton-bar" style="width: 12%;"></div></div>
+        <div class="skeleton-row"><div class="skeleton-bar" style="width: 50%;"></div><div class="skeleton-bar" style="width: 12%;"></div></div>
+      </div>
+
+      <div class="hint">
+        Subscribe to an author from the "Watch This Author" button on their Download-All-Works page. Checked
+        automatically every 6 hours in the background; when a new work appears you'll get a notification you can
+        click to open their works page.
+      </div>
+
+      <div class="actions">
+        <button id="btn-check-author-watchlist" class="secondary">Check Now</button>
+      </div>
+    </section>
+
+    <section class="card">
+      <h2>Download Stats</h2>
+
+      <div class="field" id="download-stats-list">
+        <div class="skeleton-row"><div class="skeleton-bar" style="width: 55%;"></div><div class="skeleton-bar" style="width: 15%;"></div></div>
+        <div class="skeleton-row"><div class="skeleton-bar" style="width: 55%;"></div><div class="skeleton-bar" style="width: 15%;"></div></div>
+        <div class="skeleton-row"><div class="skeleton-bar" style="width: 55%;"></div><div class="skeleton-bar" style="width: 15%;"></div></div>
+        <div class="skeleton-row"><div class="skeleton-bar" style="width: 55%;"></div><div class="skeleton-bar" style="width: 15%;"></div></div>
+      </div>
+    </section>
+
+    <section class="card">
+      <h2>Paper of the Day</h2>
+
+      <div class="field" id="paper-of-the-day">
+        <div class="skeleton-bar" style="width: 90%; height: 13.5px; margin-bottom: 8px;"></div>
+        <div class="skeleton-bar" style="width: 45%; height: 11.5px; margin-bottom: 14px;"></div>
+        <div class="skeleton-bar" style="width: 30%; height: 32px; border-radius: 8px;"></div>
+      </div>
+
+      <div class="field" id="potd-history-wrap" style="display: none; margin-top: 22px;">
+        <label>Previously shown</label>
+        <div id="potd-history-list"></div>
+      </div>
+    </section>
+
+    <section class="card">
+      <h2>Mirror Health</h2>
+
+      <div class="field" id="mirror-health-list">
+        <div class="skeleton-row"><div class="skeleton-bar" style="width: 45%;"></div><div class="skeleton-bar" style="width: 25%;"></div></div>
+        <div class="skeleton-row"><div class="skeleton-bar" style="width: 45%;"></div><div class="skeleton-bar" style="width: 25%;"></div></div>
+        <div class="skeleton-row"><div class="skeleton-bar" style="width: 45%;"></div><div class="skeleton-bar" style="width: 25%;"></div></div>
+        <div class="skeleton-row"><div class="skeleton-bar" style="width: 45%;"></div><div class="skeleton-bar" style="width: 25%;"></div></div>
+      </div>
+
+      <div class="actions">
+        <button id="btn-refresh-mirrors" class="secondary">Refresh</button>
+        <button id="btn-reset-all-mirrors" class="secondary">Reset All</button>
+      </div>
+    </section>
+
+    <section class="card">
+      <h2>Backup &amp; Support</h2>
+
+      <div class="field">
+        <label>Export Everything</label>
+        <div class="hint">
+          Downloads a single zip with your settings, watchlists, download history, and mirror health — useful for
+          backing up or moving to another machine. Export only for now; there's no import/restore yet.
+        </div>
+      </div>
+
+      <div class="actions">
+        <button id="btn-export-backup" class="secondary">Export Everything</button>
+        <span id="export-status"></span>
+      </div>
+
+      <div class="field" style="margin-top: 26px;">
+        <label>Report a Bug/Feature Request</label>
+        <div class="hint">Opens a form in a new tab to describe the issue, attach screenshots, and include code.</div>
+      </div>
+
+      <div class="actions">
+        <button id="btn-report-bug" class="secondary">Report a Bug/Feature Request</button>
+      </div>
+    </section>
+  </div>
+
+  <script src="options.js"></script>
+</body>
+</html>

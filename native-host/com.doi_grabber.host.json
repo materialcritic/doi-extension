@@ -1,0 +1,9 @@
+{
+  "name": "com.doi_grabber.host",
+  "description": "Native Messaging host for DOI Grabber",
+  "path": "/Users/YOUR_USERNAME/doi-extension/native-host/doi_host.py",
+  "type": "stdio",
+  "allowed_origins": [
+    "chrome-extension://YOUR_EXTENSION_ID/"
+  ]
+}

@@ -1,0 +1,271 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>DOI Grabber — Report a Bug / Feature Request</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+
+    :root {
+      --bg: #17171a;
+      --bg-glow: #202024;
+      --surface: #212126;
+      --surface-2: #2a2a30;
+      --surface-2-hover: #34343c;
+      --border: #34343c;
+      --text: #ece9e4;
+      --text-dim: #9d9a94;
+      --accent: #c98a4b;
+      --accent-hover: #dd9c5c;
+      --accent-text: #201406;
+      --ok: #4caf78;
+      --err: #e0574a;
+      --warn: #c9a24b;
+    }
+
+    :root[data-theme="parchment"] {
+      --bg: #f2ece0; --bg-glow: #ffffff; --surface: #ffffff; --surface-2: #e7ddc8;
+      --surface-2-hover: #dccdae; --border: #d8cbae; --text: #2a2723; --text-dim: #726a5c;
+      --accent: #b4783c; --accent-hover: #c68a4d; --accent-text: #ffffff;
+      --ok: #2f8f5d; --err: #c0392b; --warn: #a9812f;
+    }
+
+    :root[data-theme="slate"] {
+      --bg: #eef1f4; --bg-glow: #ffffff; --surface: #ffffff; --surface-2: #e3e8ee;
+      --surface-2-hover: #d3dae3; --border: #d3dae3; --text: #23282f; --text-dim: #6b7280;
+      --accent: #4f6d8f; --accent-hover: #5f7fa3; --accent-text: #ffffff;
+      --ok: #2f8f5d; --err: #c0392b; --warn: #a9812f;
+    }
+
+    :root[data-theme="sage"] {
+      --bg: #f0f2ec; --bg-glow: #ffffff; --surface: #ffffff; --surface-2: #e4e8dc;
+      --surface-2-hover: #d4dac6; --border: #d4dac6; --text: #262b22; --text-dim: #6f7566;
+      --accent: #6b8e5a; --accent-hover: #7fa06d; --accent-text: #ffffff;
+      --ok: #2f8f5d; --err: #c0392b; --warn: #a9812f;
+    }
+
+    :root[data-theme="minimal"] {
+      --bg: #ffffff; --bg-glow: #ffffff; --surface: #f7f7f7; --surface-2: #f0f0f0;
+      --surface-2-hover: #e2e2e2; --border: #dddddd; --text: #111111; --text-dim: #6e6e6e;
+      --accent: #111111; --accent-hover: #333333; --accent-text: #ffffff;
+      --ok: #1a7a4c; --err: #b3261e; --warn: #8a6d1a;
+    }
+
+    :root[data-theme="carrot"] {
+      --bg: #fdf3e7; --bg-glow: #ffffff; --surface: #ffffff; --surface-2: #fbe4c4;
+      --surface-2-hover: #f5d4a4; --border: #f0c98a; --text: #3a2410; --text-dim: #8a6a3c;
+      --accent: #e8752c; --accent-hover: #f28943; --accent-text: #ffffff;
+      --ok: #4a8f3c; --err: #c0392b; --warn: #b4781e;
+    }
+
+    html, body { min-height: 100%; }
+
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
+      background: radial-gradient(circle at 50% 0%, var(--bg-glow) 0%, var(--bg) 55%);
+      color: var(--text);
+      display: flex;
+      justify-content: center;
+      padding: 48px 24px 80px;
+    }
+
+    .page { width: 100%; max-width: 640px; }
+
+    .page-header { display: flex; align-items: center; gap: 14px; margin-bottom: 32px; }
+    .page-header h1 { font-size: 20px; font-weight: 600; letter-spacing: -0.01em; }
+    .page-header p { font-size: 12.5px; color: var(--text-dim); margin-top: 2px; }
+
+    .card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 14px;
+      padding: 26px 28px;
+      margin-bottom: 22px;
+      box-shadow: 0 1px 0 rgba(255,255,255,0.02) inset, 0 8px 24px rgba(0,0,0,0.18);
+    }
+
+    .card h2 {
+      font-size: 13px; font-weight: 600; letter-spacing: 0.06em;
+      text-transform: uppercase; color: var(--accent); margin-bottom: 20px;
+    }
+
+    label { display: block; font-size: 13px; font-weight: 500; color: var(--text); margin-bottom: 7px; }
+
+    .field { margin-bottom: 20px; }
+    .field:last-child { margin-bottom: 0; }
+
+    .hint { font-size: 11.5px; color: var(--text-dim); margin-top: 6px; }
+
+    input[type="text"], textarea, select {
+      width: 100%;
+      background: var(--surface-2);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 10px 12px;
+      font-family: "SF Mono", "Courier New", monospace;
+      font-size: 12.5px;
+      color: var(--text);
+      transition: border-color 0.15s;
+    }
+
+    select { font-family: inherit; cursor: pointer; }
+
+    textarea { resize: vertical; min-height: 100px; line-height: 1.5; }
+    textarea#code { min-height: 140px; }
+
+    input:focus, textarea:focus, select:focus { outline: none; border-color: var(--accent); }
+
+    input[type="file"] {
+      width: 100%;
+      font-family: inherit;
+      font-size: 12.5px;
+      color: var(--text-dim);
+    }
+
+    .thumbs { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 10px; }
+
+    .thumb {
+      position: relative;
+      width: 72px; height: 72px;
+      border-radius: 8px;
+      overflow: hidden;
+      border: 1px solid var(--border);
+      background: var(--surface-2);
+    }
+
+    .thumb img { width: 100%; height: 100%; object-fit: cover; display: block; }
+
+    .thumb button {
+      position: absolute;
+      top: 2px; right: 2px;
+      width: 18px; height: 18px;
+      padding: 0;
+      border-radius: 50%;
+      background: rgba(0,0,0,0.6);
+      color: #fff;
+      font-size: 11px;
+      line-height: 1;
+    }
+
+    .actions { display: flex; align-items: center; gap: 10px; margin-top: 22px; flex-wrap: wrap; }
+
+    button {
+      padding: 9px 16px;
+      border: none;
+      border-radius: 8px;
+      font-size: 12.5px;
+      font-weight: 600;
+      cursor: pointer;
+      font-family: inherit;
+      background: var(--accent);
+      color: var(--accent-text);
+      transition: background 0.15s, transform 0.1s;
+    }
+
+    button:hover { background: var(--accent-hover); }
+    button:active { transform: scale(0.98); }
+
+    button.secondary { background: var(--surface-2); color: var(--text); border: 1px solid var(--border); }
+    button.secondary:hover { background: var(--surface-2-hover); }
+
+    a.btn-secondary {
+      display: inline-block;
+      padding: 9px 16px;
+      border-radius: 8px;
+      font-size: 12.5px;
+      font-weight: 600;
+      cursor: pointer;
+      font-family: inherit;
+      background: var(--surface-2);
+      color: var(--text);
+      border: 1px solid var(--border);
+      text-decoration: none;
+      transition: background 0.15s, transform 0.1s;
+    }
+
+    a.btn-secondary:hover { background: var(--surface-2-hover); }
+
+    #form-status { font-size: 12px; color: var(--text-dim); }
+    #form-status.ok { color: var(--ok); }
+    #form-status.error { color: var(--err); }
+
+    .type-toggle { display: flex; gap: 8px; }
+    .type-toggle button {
+      flex: 1;
+      background: var(--surface-2);
+      color: var(--text-dim);
+      border: 1px solid var(--border);
+    }
+    .type-toggle button.active {
+      background: var(--accent);
+      color: var(--accent-text);
+      border-color: var(--accent);
+    }
+  </style>
+  <script src="theme.js"></script>
+</head>
+<body>
+  <div class="page">
+    <div class="page-header">
+      <div>
+        <h1>Report a Bug / Feature Request</h1>
+        <p>Opens a pre-filled GitHub issue with your description, code, and screenshots.</p>
+      </div>
+    </div>
+
+    <section class="card">
+      <h2>Type</h2>
+      <div class="field">
+        <div class="type-toggle">
+          <button type="button" id="type-bug" class="active">Bug</button>
+          <button type="button" id="type-feature">Feature Request</button>
+        </div>
+      </div>
+    </section>
+
+    <section class="card">
+      <h2>Details</h2>
+
+      <div class="field">
+        <label for="title">Title</label>
+        <input type="text" id="title" placeholder="Short summary of the issue" />
+      </div>
+
+      <div class="field">
+        <label for="description">Description</label>
+        <textarea id="description" placeholder="What happened? What did you expect instead? Steps to reproduce, if a bug."></textarea>
+      </div>
+
+      <div class="field">
+        <label for="code">Code (optional)</label>
+        <textarea id="code" placeholder="Paste any relevant code, console errors, or logs here."></textarea>
+        <div class="hint">Pasted as a fenced code block in the issue.</div>
+      </div>
+
+      <div class="field">
+        <label for="screenshots">Screenshots (optional)</label>
+        <input type="file" id="screenshots" accept="image/*" multiple />
+        <div class="thumbs" id="thumbs"></div>
+        <div class="hint">
+          GitHub issue links can't carry image attachments automatically — once the issue page opens, drag these
+          files (or paste them) into the description box to attach them.
+        </div>
+      </div>
+    </section>
+
+    <section class="card">
+      <div class="actions">
+        <button id="btn-submit">Open GitHub Issue</button>
+        <button id="btn-email-fallback" class="secondary">Copy Report for Email</button>
+        <span id="form-status"></span>
+      </div>
+      <div class="hint" style="margin-top: 10px;">
+        No default mail app? Copies the report as text so you can paste it into whatever email client or webmail
+        you use, addressed to <strong id="fallback-email-address"></strong>.
+      </div>
+    </section>
+  </div>
+
+  <script src="report.js"></script>
+</body>
+</html>

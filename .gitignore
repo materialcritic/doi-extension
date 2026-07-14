@@ -1,0 +1,16 @@
+.DS_Store
+.claude/
+
+# Downloaded papers and local runtime state — not source, not for version control
+native-host/papers/
+native-host/download_log.txt
+native-host/mirror_health.json
+
+# Backup zips exported from the extension's Settings page
+doi-grabber-backup-*.zip
+
+# Stray accidental directory (literal "{extension,native-host}" from an earlier command)
+{extension,native-host}/
+
+__pycache__/
+*.pyc
