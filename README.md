@@ -16,7 +16,7 @@ This is a **personal, single-machine tool** — it is not published on the Chrom
 - [How it's built](#how-its-built)
 - [Prerequisites](#prerequisites)
 - [Installation](#installation)
-  - [1. Load the Chrome extension](#1-load-the-chrome-extension)
+  - [1. Clone the repo and load the Chrome extension](#1-clone-the-repo-and-load-the-chrome-extension)
   - [2. Install the Native Messaging host](#2-install-the-native-messaging-host)
   - [3. Point the extension at your Python setup](#3-point-the-extension-at-your-python-setup)
   - [4. Try it](#4-try-it)
@@ -29,6 +29,7 @@ This is a **personal, single-machine tool** — it is not published on the Chrom
   - [Download Entire Journal](#download-entire-journal)
   - [Similar Papers](#similar-papers)
 - [Settings page](#settings-page)
+- [Keeping it up to date](#keeping-it-up-to-date)
 - [Reporting a bug or requesting a feature](#reporting-a-bug-or-requesting-a-feature)
 - [Project structure](#project-structure)
 - [Known limitations](#known-limitations)
@@ -80,13 +81,16 @@ The extension talks to the free **Crossref**, **OpenAlex**, and **Semantic Schol
   pip3 install requests beautifulsoup4      # macOS/Linux
   py -m pip install requests beautifulsoup4 # Windows
   ```
+- **`git`**, installed and on your PATH — used both to clone this repo initially and by the extension's own [self-update feature](#keeping-it-up-to-date), which shells out to `git fetch`/`git pull` in your local checkout.
 - Familiarity with `chrome://extensions` Developer Mode, and running shell scripts from Terminal (macOS) or PowerShell (Windows)
 
 `native-host/doi_host.py` and `native-host/scihub_download.py` auto-detect sensible defaults (their own folder for log/health files, `python3`/`python`/the `py` launcher for the interpreter, `~/Downloads/autorename` for the output folder) so they work out of the box on both platforms — nothing needs source-editing before first install, only the Settings-page fields below.
 
 ## Installation
 
-### 1. Load the Chrome extension
+### 1. Clone the repo and load the Chrome extension
+
+Pick one folder for the whole repo up front — both the extension and the native host need to live under the **same git checkout** (the [self-update feature](#keeping-it-up-to-date) runs `git pull` in whatever folder `native-host/doi_host.py` sits in, and that only makes sense if it's this repo). A plain `git clone` from Terminal doesn't trigger the macOS Gatekeeper quarantine flag (see the note below), so cloning straight into `~/Downloads` is fine — you don't need to relocate it afterwards.
 
 ```bash
 git clone https://github.com/materialcritic/doi-extension.git
@@ -103,10 +107,10 @@ cd doi-extension
 <details open>
 <summary><strong>macOS / Linux</strong></summary>
 
-> **Important — do this from outside your Downloads folder.** macOS Gatekeeper attaches a quarantine flag to files that were downloaded through a browser (including a repo cloned into a `~/Downloads` subfolder in some setups). That quarantine flag silently blocks Chrome from executing `doi_host.py`, and the failure just looks like "native host has exited" with no clear reason. Move (or re-clone) the repo to a normal location first, e.g. `~/doi-extension`, before running the installer.
+> **If Chrome reports "native host has exited" later, check for a quarantine flag first.** macOS Gatekeeper attaches `com.apple.quarantine` to files that were downloaded through a browser or saved by an app like TextEdit/Finder from a browser-downloaded source — that flag silently blocks Chrome from executing `doi_host.py`. A `git clone` run from Terminal does **not** set this flag, so it typically isn't an issue here — but if you ever hit it (e.g. after manually re-saving `doi_host.py` from a browser-downloaded copy), check with `xattr -l native-host/doi_host.py` and clear it with `xattr -d com.apple.quarantine native-host/doi_host.py`. See [Troubleshooting](#troubleshooting) for the full recovery steps.
 
 ```bash
-cd ~/doi-extension/native-host   # wherever you placed it, outside Downloads
+cd doi-extension/native-host   # wherever you cloned the repo, from step 1
 ./install.sh
 ```
 
@@ -257,9 +261,21 @@ Right-click the toolbar icon → **Options** (or click ⚙ in the popup):
 - **Download Stats** — total-ever / last-7-weeks / last-7-months / last-year download counts
 - **Paper of the Day** — a deterministic daily pick from your download history, with a "Show Another" button and history list
 - **Mirror Health** — per-mirror fail count, cooldown countdown, and a latency sparkline; per-mirror or global reset
+- **Updates** — check for and install new versions from GitHub; see [Keeping it up to date](#keeping-it-up-to-date)
 - **Backup & Support**:
   - **Export Everything** — bundles your settings, watchlists, download history, and mirror health into a downloadable `.zip`
   - **Report a Bug/Feature Request** — see below
+
+## Keeping it up to date
+
+Since this isn't distributed through the Chrome Web Store, "updating" means pulling new commits into your local git clone — Settings has a card that does this for you:
+
+- **Check for Updates** — runs `git fetch` against `origin` and lists how many commits you're behind, with the changelog (commit messages) for what would land.
+- **Update Now** — appears once you're behind. Runs a fast-forward-only `git pull` (`git pull --ff-only`) through the native host. It refuses if your checkout has any uncommitted local changes, rather than risking a conflicted merge — commit or stash first if you've been editing the code yourself.
+- After a successful update, the extension reloads itself automatically. If any file under `native-host/` changed, you'll be told to **fully restart Chrome** as well (see [Known limitations](#known-limitations)) — an extension reload alone won't pick up native-host code changes.
+- The popup shows a small **"Update available"** hint whenever you're behind, driven by a background check every 12 hours — click it to jump straight to the Updates card.
+
+This only works because the extension and native host are loaded from the same git checkout (see [step 1 of installation](#1-clone-the-repo-and-load-the-chrome-extension)) with an `origin` remote pointed at this repo — if you installed by copying files instead of cloning, the update check will fail with a git error, and you'll need to update by pulling manually instead.
 
 ## Reporting a bug or requesting a feature
 
@@ -312,6 +328,7 @@ doi-extension/
 - Requires **restarting Chrome** (not just reloading the extension) after any change to `doi_host.py` or `scihub_download.py`, since the native host is a separate long-lived process.
 - **Windows support is implemented but unverified** on a real Windows machine (built and reasoned through, not hands-on tested) — see the callout in [step 2 of installation](#2-install-the-native-messaging-host).
 - On Linux, "Reveal in Finder" falls back to just opening the containing folder (via `xdg-open`) rather than selecting the file within it — there's no single standard way to select a specific file across Linux file managers the way `open -R`/`explorer /select,` do on macOS/Windows.
+- **Self-update only supports a clean fast-forward** — if you've made local edits to the code, or your branch has diverged from `origin` for any other reason, "Update Now" will refuse rather than merge/rebase automatically. Commit, stash, or reset your changes first, then update.
 
 ## Troubleshooting
 
@@ -328,3 +345,8 @@ doi-extension/
 
 **Popup shows the right DOI but every action button stays disabled:**
 - The background availability check may still be running — give it a few seconds, or check `chrome://extensions` for a service worker error.
+
+**"Check for Updates" / "Update Now" fails or says "native host unreachable":**
+- Confirm `git` is installed and on the PATH the native host sees (it inherits Chrome's environment, which may differ from your Terminal's — try running `which git` from the same shell you'd normally use, and if it's in a nonstandard location, that's a real gap this feature doesn't currently work around).
+- "Local changes exist in the repo checkout" means you (or a tool) edited a tracked file directly — run `git status` in the repo to see what, then commit or stash it before retrying.
+- Confirm the checkout has a real `origin` remote pointed at this GitHub repo (`git remote -v` from the repo root) — this feature assumes a normal clone, not a folder of copied files.
