@@ -34,6 +34,7 @@ This is a **personal, single-machine tool** — it is not published on the Chrom
 - [Project structure](#project-structure)
 - [Known limitations](#known-limitations)
 - [Troubleshooting](#troubleshooting)
+- [Development workflow](#development-workflow)
 
 ---
 
