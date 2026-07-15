@@ -15,6 +15,9 @@ const searchInput = document.getElementById("search-input");
 const noMatchesEl = document.getElementById("no-matches");
 const progressBarWrap = document.getElementById("progress-bar-wrap");
 const progressBar = document.getElementById("progress-bar");
+const batchRunControlsEl = document.getElementById("batch-run-controls");
+const btnBatchPause = document.getElementById("btn-batch-pause");
+const btnBatchCancel = document.getElementById("btn-batch-cancel");
 const yearHistogramEl = document.getElementById("year-histogram");
 const externalLinksEl = document.querySelector(".external-links");
 const btnScholar = document.getElementById("btn-scholar");
@@ -475,6 +478,48 @@ document.getElementById("sort-select").addEventListener("change", (e) => {
   renderWorks();
 });
 
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+// Same shared pause/cancel pattern as issue.js's downloadIssueGroup(), checked
+// between every single DOI so a click takes effect within seconds.
+let batchControl = null;
+
+function startBatchControls() {
+  batchControl = { paused: false, cancelled: false };
+  batchRunControlsEl.style.display = "flex";
+  btnBatchPause.textContent = "Pause";
+  btnBatchPause.disabled = false;
+  btnBatchCancel.disabled = false;
+  return batchControl;
+}
+
+function endBatchControls() {
+  batchRunControlsEl.style.display = "none";
+  batchControl = null;
+}
+
+async function waitWhilePaused(control) {
+  while (control.paused && !control.cancelled) {
+    await sleep(300);
+  }
+}
+
+btnBatchPause.addEventListener("click", () => {
+  if (!batchControl) return;
+  batchControl.paused = !batchControl.paused;
+  btnBatchPause.textContent = batchControl.paused ? "Resume" : "Pause";
+});
+
+btnBatchCancel.addEventListener("click", () => {
+  if (!batchControl) return;
+  batchControl.cancelled = true;
+  batchControl.paused = false; // don't leave it stuck inside waitWhilePaused
+  btnBatchPause.disabled = true;
+  btnBatchCancel.disabled = true;
+});
+
 async function runDownload(indices) {
   if (indices.length === 0) return;
 
@@ -485,6 +530,8 @@ async function runDownload(indices) {
 
   progressBarWrap.style.display = "block";
   progressBar.style.width = "0%";
+
+  const control = startBatchControls();
 
   let done = 0;
   let failed = 0;
@@ -498,7 +545,11 @@ async function runDownload(indices) {
     return `${minutes}m ${seconds}s`;
   }
 
+  let cancelled = false;
   for (const i of indices) {
+    await waitWhilePaused(control);
+    if (control.cancelled) { cancelled = true; break; }
+
     const work = displayWorks[i];
     failedKeys.delete(workKey(work));
 
@@ -546,10 +597,13 @@ async function runDownload(indices) {
     });
   }
 
-  logLine(`SUMMARY | ${done} downloaded, ${failed} failed, ${indices.length} total`);
-  statusLineEl.textContent = `Done — ${done} downloaded, ${failed} failed. Saved to ${outputDirOverride}`;
+  logLine(`SUMMARY | ${done} downloaded, ${failed} failed, ${indices.length} total${cancelled ? " (cancelled)" : ""}`);
+  statusLineEl.textContent = cancelled
+    ? `Cancelled — ${done} downloaded, ${failed} failed. Saved to ${outputDirOverride}`
+    : `Done — ${done} downloaded, ${failed} failed. Saved to ${outputDirOverride}`;
   progressBar.style.width = "100%";
   setTimeout(() => { progressBarWrap.style.display = "none"; }, 600);
+  endBatchControls();
   btnSelectAll.disabled = false;
   btnSelectNone.disabled = false;
   btnRetryFailed.style.display = failedKeys.size > 0 ? "block" : "none";

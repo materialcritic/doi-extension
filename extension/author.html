@@ -246,6 +246,13 @@
     #search-input::placeholder { color: var(--text-dim); }
     #search-input:focus { outline: none; border-color: var(--accent); }
 
+    .batch-controls {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      flex-wrap: wrap;
+    }
+
     #progress-bar-wrap {
       height: 6px;
       background: var(--surface-2);
@@ -553,6 +560,11 @@
 
   <div id="progress-bar-wrap" style="display: none;">
     <div id="progress-bar"></div>
+  </div>
+
+  <div id="batch-run-controls" class="batch-controls" style="display: none; margin-bottom: 12px;">
+    <button id="btn-batch-pause">Pause</button>
+    <button id="btn-batch-cancel">Cancel</button>
   </div>
 
   <div id="loading">
