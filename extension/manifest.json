@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "DOI Grabber",
-  "version": "1.0",
+  "version": "1.1",
   "description": "Detects DOIs on academic pages and sends them to your local Python script via Native Messaging.",
   "permissions": [
     "activeTab",

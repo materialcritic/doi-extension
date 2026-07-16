@@ -59,6 +59,10 @@ function setStatus(msg, type = "") {
   statusEl.className = type;
 }
 
+function escapeHtml(s) {
+  return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+}
+
 function clearLog() {
   logEl.textContent = "";
   logEl.classList.remove("visible");
@@ -426,7 +430,7 @@ btnQR.addEventListener("click", () => {
 
 function renderReferences(resp) {
   if (!resp || !resp.success) {
-    referencesList.innerHTML = `<div class="hint" style="padding: 6px 0;">Couldn't load references: ${resp?.error || "Unknown error"}</div>`;
+    referencesList.innerHTML = `<div class="hint" style="padding: 6px 0;">Couldn't load references: ${escapeHtml(resp?.error || "Unknown error")}</div>`;
     return;
   }
 
@@ -494,7 +498,7 @@ btnReferences.addEventListener("click", () => {
 
 function renderCitedBy(resp) {
   if (!resp || !resp.success) {
-    citedByList.innerHTML = `<div class="hint" style="padding: 6px 0;">Couldn't load citing papers: ${resp?.error || "Unknown error"}</div>`;
+    citedByList.innerHTML = `<div class="hint" style="padding: 6px 0;">Couldn't load citing papers: ${escapeHtml(resp?.error || "Unknown error")}</div>`;
     return;
   }
 
@@ -560,7 +564,7 @@ btnCitedBy.addEventListener("click", () => {
 
 function renderRelated(resp) {
   if (!resp || !resp.success) {
-    relatedList.innerHTML = `<div class="hint" style="padding: 6px 0;">Couldn't load related papers: ${resp?.error || "Unknown error"}</div>`;
+    relatedList.innerHTML = `<div class="hint" style="padding: 6px 0;">Couldn't load related papers: ${escapeHtml(resp?.error || "Unknown error")}</div>`;
     return;
   }
 

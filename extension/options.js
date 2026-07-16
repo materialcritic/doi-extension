@@ -215,7 +215,7 @@ function loadMirrorHealth() {
 
   chrome.runtime.sendMessage({ action: "getMirrorHealth" }, (resp) => {
     if (!resp || !resp.success) {
-      container.innerHTML = `<div class="hint">Couldn't load mirror status: ${resp?.error || "Unknown error"}</div>`;
+      container.innerHTML = `<div class="hint">Couldn't load mirror status: ${escapeHtml(resp?.error || "Unknown error")}</div>`;
       return;
     }
 
@@ -412,7 +412,7 @@ function loadDownloadStats() {
 
   chrome.runtime.sendMessage({ action: "getDownloadStats" }, (resp) => {
     if (!resp || !resp.success) {
-      container.innerHTML = `<div class="hint">Couldn't load download stats: ${resp?.error || "Unknown error"}</div>`;
+      container.innerHTML = `<div class="hint">Couldn't load download stats: ${escapeHtml(resp?.error || "Unknown error")}</div>`;
       return;
     }
 
@@ -449,7 +449,7 @@ function loadPaperOfTheDay(refresh) {
 
   chrome.runtime.sendMessage({ action: "getPaperOfTheDay", refresh: !!refresh }, (resp) => {
     if (!resp || !resp.success) {
-      container.innerHTML = `<div class="hint">${resp?.error || "Couldn't pick a paper of the day."} Download a few papers first.</div>`;
+      container.innerHTML = `<div class="hint">${escapeHtml(resp?.error || "Couldn't pick a paper of the day.")} Download a few papers first.</div>`;
       return;
     }
 
@@ -621,7 +621,7 @@ const updateActionStatusEl = document.getElementById("update-action-status");
 function renderUpdateStatus(resp) {
   if (!resp || !resp.success) {
     updateStatusEl.innerHTML = `<div class="hint">Couldn't check for updates: ${
-      (resp && resp.error) || "native host unreachable"
+      escapeHtml((resp && resp.error) || "native host unreachable")
     }</div>`;
     updateChangelogWrapEl.style.display = "none";
     btnApplyUpdate.style.display = "none";
@@ -632,7 +632,7 @@ function renderUpdateStatus(resp) {
     updateStatusEl.innerHTML = `<div class="hint">${resp.behindBy} update${
       resp.behindBy === 1 ? "" : "s"
     } available (currently at <code>${resp.localSha}</code>).</div>`;
-    updateChangelogEl.innerHTML = resp.commits.map((c) => `<div class="row">${escapeHtmlUpdate(c)}</div>`).join("");
+    updateChangelogEl.innerHTML = resp.commits.map((c) => `<div class="row">${escapeHtml(c)}</div>`).join("");
     updateChangelogWrapEl.style.display = "";
     btnApplyUpdate.style.display = "";
   } else {
@@ -651,7 +651,7 @@ function renderUpdateStatus(resp) {
   });
 }
 
-function escapeHtmlUpdate(s) {
+function escapeHtml(s) {
   return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
 }
 
