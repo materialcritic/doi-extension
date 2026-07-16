@@ -296,6 +296,15 @@ btnRun.addEventListener("click", () => {
         lastFilepath = result.filepath;
         btnReveal.classList.add("visible");
       }
+      // A successful Sci-Hub download proves availability regardless of
+      // what the earlier automatic check badged — flip the banner/badge
+      // rather than leave a stale "Not available" showing next to a paper
+      // that just downloaded fine. Doesn't apply to open_access downloads
+      // (Unpaywall/publisher-page tiers), which say nothing about Sci-Hub.
+      if (result.source !== "open_access") {
+        setAvailabilityUI("available");
+        chrome.runtime.sendMessage({ action: "updateAvailability", doi: currentDOI, tabId: currentTabId, status: "available" });
+      }
     } else if (result.status === "corrupt") {
       const filename = result.filepath ? result.filepath.split("/").pop() : null;
       setStatus(`Not a valid PDF${filename ? ": " + filename : ""} — mirror likely served an error page`, "err");
@@ -358,6 +367,12 @@ btnLink.addEventListener("click", () => {
       navigator.clipboard.writeText(result.pdf_url).then(() => {
         setStatus("Link copied ✓", "ok");
       });
+      // Same reasoning as the Download success handler above — this is a
+      // fresh, direct confirmation, so it should override a stale badge.
+      if (result.source !== "open_access") {
+        setAvailabilityUI("available");
+        chrome.runtime.sendMessage({ action: "updateAvailability", doi: currentDOI, tabId: currentTabId, status: "available" });
+      }
     } else if (result.status === "unavailable") {
       setStatus("Not available on Sci-Hub", "err");
     } else {

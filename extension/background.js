@@ -1079,6 +1079,24 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     return;
   }
 
+  if (request.action === "updateAvailability") {
+    // A successful download is concrete proof of availability that should
+    // override an earlier badge/background-check result, however that result
+    // came about — Sci-Hub's mirrors are flaky enough (see the mirror-race
+    // retry logic in scihub_download.py) that the automatic check can land on
+    // "unavailable" moments before a manual Download click succeeds. Without
+    // this, the popup and toolbar badge stay stuck showing "unavailable"
+    // even right after a real, successful download of that same DOI.
+    const tabId = sender.tab ? sender.tab.id : request.tabId;
+    if (tabId != null && tabState[tabId] && tabState[tabId].doi === request.doi) {
+      tabState[tabId].status = request.status;
+      if (request.status === "available") setAvailableBadge(tabId);
+      else if (request.status === "unavailable") setUnavailableBadge(tabId);
+    }
+    sendResponse({ success: true });
+    return;
+  }
+
   if (request.action === "getReferences") {
     fetch("https://api.crossref.org/works/" + encodeURIComponent(request.doi))
       .then((r) => {
