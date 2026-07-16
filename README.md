@@ -184,9 +184,9 @@ Click the toolbar icon on any page with a detected DOI to get:
 | **Common Collaborators** | Opens the [co-author network page](#common-collaborators) for the detected author. |
 | **Download This Issue** | Opens the [issue download page](#download-this-issue) for the paper's volume/issue. |
 | **QR Code** | Shows a scannable QR code (generated fully offline — nothing leaves your machine) linking to the article on Sci-Hub, for opening on your phone. |
-| **References** | Lists the paper's references (via Crossref), each row clickable straight to Sci-Hub. |
-| **Cited By** | Lists papers that cite this one (via Semantic Scholar). |
-| **Related Papers** | Citation-graph-based recommendations (via Semantic Scholar's Recommendations API) — different from the keyword-based "Find Similar" on the full-page tools. |
+| **References** | Lists the paper's references (via Crossref), each row clickable straight to its DOI page (redirects to whichever publisher/journal hosts it). |
+| **Cited By** | Lists papers that cite this one (via Semantic Scholar), each row clickable straight to its DOI page. |
+| **Related Papers** | Citation-graph-based recommendations (via Semantic Scholar's Recommendations API) — different from the keyword-based "Find Similar" on the full-page tools. Each row also opens straight to its DOI page. |
 | **Reveal in Finder** | Shown after a successful download — opens Finder (macOS) or File Explorer (Windows) with the file selected. |
 | **Delete Corrupt File** | Shown if the download failed the PDF-header check (usually means a mirror served an HTML error page instead of a real PDF). |
 | **Search Google Instead** | Opens a Google search for `<title> <author>` — always available, not just when unavailable. |
@@ -237,7 +237,7 @@ Searches Crossref for every work matching the detected author's name (up to 1,00
 
 ### Common Collaborators
 
-Same underlying author search, but tallies co-author frequency into a ranked list (excluding the target author themselves), each linking to that person's own author page. Toggle **"Show Network Graph"** for a radial visualization — the target author in the center, their top 20 collaborators arranged around them, with lines to collaborators who also worked together directly.
+Same underlying author search, but tallies co-author frequency into a ranked list (excluding the target author themselves), each linking to that person's own author page. A radial network graph — the target author in the center, their top 20 collaborators arranged around them, with lines to collaborators who also worked together directly — is shown open by default above the list; use **"Hide Network Graph"** to collapse it if you just want the list.
 
 ### Download This Issue
 
@@ -311,6 +311,7 @@ doi-extension/
 │   ├── report.html / report.js    # Bug/feature report form
 │   ├── theme.js                   # Shared 6-palette color theme system
 │   ├── shortcuts.js                # Shared popup-shortcut definitions
+│   ├── keywords.js                 # Shared keyword-extraction for "Find Similar"
 │   ├── scihub-fullscreen.js       # Content script: auto-expands the PDF viewer on Sci-Hub mirrors
 │   ├── vendor/qrcode.js           # Vendored offline QR encoder
 │   ├── vendor/zipwriter.js        # Vendored zero-dependency ZIP writer (for Export Everything)
