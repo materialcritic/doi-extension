@@ -1052,7 +1052,13 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
       const port = chrome.runtime.connectNative(NATIVE_HOST);
 
       port.onMessage.addListener((message) => {
-        if (message.type === "progress") return;
+        if (message.type === "progress") {
+          // Same forwarding as sendDOI's download flow, so "Resolving
+          // link…" doesn't sit static for the ~60-120s a full mirror
+          // race + Unpaywall + publisher-page fallback chain can take.
+          chrome.runtime.sendMessage({ action: "progress", line: message.line }, () => void chrome.runtime.lastError);
+          return;
+        }
         sendResponse({ success: true, result: message });
         port.disconnect();
       });
@@ -1231,6 +1237,19 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
       chrome.tabs.create({ url, active: false });
       sendResponse({ success: true });
     });
+    return true;
+  }
+
+  if (request.action === "openDoiPage") {
+    // Straight to the DOI resolver — it 302s to whatever the publisher/
+    // journal actually hosts the page at, unlike openSciHubPage above.
+    // Used by rows (References/Cited-By/Related) that link to a *different*
+    // paper than the one currently loaded, where sending the user to a
+    // pirate mirror isn't the point — same background-tab treatment so
+    // clicking a row doesn't close the popup.
+    const url = "https://doi.org/" + request.doi;
+    chrome.tabs.create({ url, active: false });
+    sendResponse({ success: true });
     return true;
   }
 

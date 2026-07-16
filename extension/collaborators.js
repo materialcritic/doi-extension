@@ -117,11 +117,12 @@ let lastCollaborators = [];
 let lastEdges = [];
 let graphBuilt = false;
 
+// Graph and list are shown together (graph on top, list below) rather than
+// as mutually-exclusive views — this toggle only hides/shows the graph.
 btnToggleView.addEventListener("click", () => {
   const showingGraph = graphViewEl.style.display !== "none";
   if (showingGraph) {
     graphViewEl.style.display = "none";
-    listEl.style.display = "block";
     document.body.classList.remove("graph-active");
     btnToggleView.textContent = "Show Network Graph";
   } else {
@@ -129,10 +130,9 @@ btnToggleView.addEventListener("click", () => {
       renderNetworkGraph(authorName, lastCollaborators, lastEdges);
       graphBuilt = true;
     }
-    listEl.style.display = "none";
     graphViewEl.style.display = "block";
     document.body.classList.add("graph-active");
-    btnToggleView.textContent = "Show List";
+    btnToggleView.textContent = "Hide Network Graph";
   }
 });
 
@@ -168,6 +168,12 @@ if (!authorName) {
     lastCollaborators = collaborators;
     lastEdges = resp.edges || [];
     viewToolbarEl.style.display = "flex";
+
+    // Network graph is open by default, with the list always visible below it.
+    renderNetworkGraph(authorName, lastCollaborators, lastEdges);
+    graphBuilt = true;
+    graphViewEl.style.display = "block";
+    document.body.classList.add("graph-active");
 
     const maxCount = collaborators[0].count;
     listEl.style.display = "block";

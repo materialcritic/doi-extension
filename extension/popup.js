@@ -425,7 +425,7 @@ function renderReferences(resp) {
     row.className = "ref-row";
     row.title = ref.doi;
     row.addEventListener("click", () => {
-      chrome.runtime.sendMessage({ action: "openSciHubPage", doi: ref.doi });
+      chrome.runtime.sendMessage({ action: "openDoiPage", doi: ref.doi });
     });
 
     const title = document.createElement("div");
@@ -493,7 +493,7 @@ function renderCitedBy(resp) {
     row.className = "ref-row";
     row.title = cite.doi;
     row.addEventListener("click", () => {
-      chrome.runtime.sendMessage({ action: "openSciHubPage", doi: cite.doi });
+      chrome.runtime.sendMessage({ action: "openDoiPage", doi: cite.doi });
     });
 
     const title = document.createElement("div");
@@ -559,7 +559,7 @@ function renderRelated(resp) {
     row.className = "ref-row";
     row.title = rel.doi;
     row.addEventListener("click", () => {
-      chrome.runtime.sendMessage({ action: "openSciHubPage", doi: rel.doi });
+      chrome.runtime.sendMessage({ action: "openDoiPage", doi: rel.doi });
     });
 
     const title = document.createElement("div");
