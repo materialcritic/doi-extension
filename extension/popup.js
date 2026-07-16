@@ -351,6 +351,7 @@ btnCopy.addEventListener("click", () => {
 
 btnLink.addEventListener("click", () => {
   if (!currentDOI) return;
+  clearLog();
   setStatus("Resolving link…");
   btnLink.disabled = true;
 
