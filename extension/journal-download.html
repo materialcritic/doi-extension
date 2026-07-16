@@ -107,7 +107,11 @@
 
     header {
       padding: 24px 24px 16px;
+      display: flex;
+      align-items: flex-start;
     }
+
+    header .header-text { flex: 1; }
 
     header h1 {
       font-size: 20px;
@@ -119,6 +123,25 @@
       color: var(--text-dim);
       margin-top: 4px;
     }
+
+    #btn-theme-toggle {
+      background: var(--surface-2);
+      border: 1px solid var(--border);
+      color: var(--text);
+      width: 36px;
+      height: 36px;
+      border-radius: 8px;
+      font-size: 13px;
+      cursor: pointer;
+      flex-shrink: 0;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 0;
+      line-height: 1;
+    }
+
+    #btn-theme-toggle:hover { background: var(--surface-2-hover); }
 
     #toolbar {
       position: sticky;
@@ -343,8 +366,11 @@
 </head>
 <body>
   <header>
-    <h1 id="journal-title">Loading…</h1>
-    <p id="subtitle">Fetching every issue from Crossref…</p>
+    <div class="header-text">
+      <h1 id="journal-title">Loading…</h1>
+      <p id="subtitle">Fetching every issue from Crossref…</p>
+    </div>
+    <button id="btn-theme-toggle" title="Toggle theme" data-theme-icon>☀</button>
   </header>
 
   <div id="toolbar" style="display: none;">
