@@ -29,8 +29,11 @@
       --delete-bg-hover: #d8493a;
       --delete-text: #f9f7f3;
       --ok: #4caf78;
+      --ok-soft: rgba(76,175,120,0.18);
       --err: #e0574a;
+      --err-soft: rgba(224,87,74,0.18);
       --dot: #e0574a;
+      --shadow: 0 12px 32px rgba(0,0,0,0.45);
     }
 
     :root[data-theme="parchment"] {
@@ -52,11 +55,14 @@
       --search-bg-hover: #c68a4d;
       --search-text: #ffffff;
       --ok: #2f8f5d;
+      --ok-soft: rgba(47,143,93,0.14);
       --err: #c0392b;
+      --err-soft: rgba(192,57,43,0.14);
       --dot: #c0392b;
       --delete-bg: #c0392b;
       --delete-bg-hover: #d8493a;
       --delete-text: #ffffff;
+      --shadow: 0 12px 28px rgba(60,40,10,0.12);
     }
 
     :root[data-theme="slate"] {
@@ -78,11 +84,14 @@
       --search-bg-hover: #5f7fa3;
       --search-text: #ffffff;
       --ok: #2f8f5d;
+      --ok-soft: rgba(47,143,93,0.14);
       --err: #c0392b;
+      --err-soft: rgba(192,57,43,0.14);
       --dot: #c0392b;
       --delete-bg: #c0392b;
       --delete-bg-hover: #d8493a;
       --delete-text: #ffffff;
+      --shadow: 0 12px 28px rgba(20,30,45,0.12);
     }
 
     :root[data-theme="sage"] {
@@ -104,11 +113,14 @@
       --search-bg-hover: #7fa06d;
       --search-text: #ffffff;
       --ok: #2f8f5d;
+      --ok-soft: rgba(47,143,93,0.14);
       --err: #c0392b;
+      --err-soft: rgba(192,57,43,0.14);
       --dot: #c0392b;
       --delete-bg: #c0392b;
       --delete-bg-hover: #d8493a;
       --delete-text: #ffffff;
+      --shadow: 0 12px 28px rgba(30,40,20,0.12);
     }
 
     :root[data-theme="minimal"] {
@@ -130,11 +142,14 @@
       --search-bg-hover: #333333;
       --search-text: #ffffff;
       --ok: #1a7a4c;
+      --ok-soft: rgba(26,122,76,0.1);
       --err: #b3261e;
+      --err-soft: rgba(179,38,30,0.1);
       --dot: #b3261e;
       --delete-bg: #b3261e;
       --delete-bg-hover: #cc3324;
       --delete-text: #ffffff;
+      --shadow: 0 12px 24px rgba(0,0,0,0.08);
     }
 
     :root[data-theme="carrot"] {
@@ -156,217 +171,257 @@
       --search-bg-hover: #f28943;
       --search-text: #ffffff;
       --ok: #4a8f3c;
+      --ok-soft: rgba(74,143,60,0.14);
       --err: #c0392b;
+      --err-soft: rgba(192,57,43,0.14);
       --dot: #c0392b;
       --delete-bg: #c0392b;
       --delete-bg-hover: #d8493a;
       --delete-text: #ffffff;
+      --shadow: 0 12px 28px rgba(90,50,10,0.12);
     }
 
     body {
-      width: 260px;
-      font-family: "Georgia", serif;
+      width: 320px;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
       background: var(--bg);
       color: var(--text);
-      padding: 14px;
+      -webkit-font-smoothing: antialiased;
     }
 
     header {
       display: flex;
       align-items: center;
-      gap: 6px;
-      margin-bottom: 12px;
+      gap: 8px;
+      padding: 12px 14px;
       border-bottom: 1px solid var(--border);
-      padding-bottom: 8px;
     }
+
+    header .brand {
+      display: flex;
+      align-items: center;
+      gap: 7px;
+      font-weight: 700;
+      font-size: 14px;
+    }
+
+    header .brand img { width: 16px; height: 16px; display: block; }
 
     header .spacer { flex: 1; }
 
-    #btn-settings, #btn-theme-toggle {
+    .icon-btn {
       background: none;
       border: none;
       color: var(--text-dim);
       font-size: 13px;
       cursor: pointer;
-      width: 22px;
-      height: 22px;
+      width: 28px;
+      height: 28px;
       flex-shrink: 0;
-      border-radius: 5px;
+      border-radius: 8px;
       display: flex;
       align-items: center;
       justify-content: center;
       padding: 0;
       line-height: 1;
+      transition: background 0.15s, color 0.15s;
     }
 
-    #btn-settings:hover, #btn-theme-toggle:hover {
-      color: var(--text);
-      background: var(--btn-bg);
-    }
+    .icon-btn:hover { color: var(--text); background: var(--btn-bg); }
 
-    header .dot {
-      width: 6px; height: 6px;
-      border-radius: 50%;
-      background: var(--dot);
-      flex-shrink: 0;
-      align-self: center;
-    }
-
-    #doi-box {
-      background: var(--bg-panel);
-      border: 1px solid var(--border);
-      border-radius: 4px;
-      padding: 9px 11px;
-      font-family: "Courier New", monospace;
-      font-size: 12px;
-      color: var(--text);
-      word-break: break-all;
-      line-height: 1.4;
-      min-height: 30px;
-      display: flex;
-      align-items: center;
-    }
-
-    #doi-box.empty {
-      color: var(--text-dim);
-      font-family: "Georgia", serif;
-      font-style: italic;
-      font-size: 13px;
-    }
-
-    #doi-box.error {
-      color: var(--err);
-      font-family: "Georgia", serif;
-      font-style: italic;
-      font-size: 13px;
-    }
-
-    .actions {
-      display: flex;
-      gap: 6px;
-      margin-top: 10px;
-    }
-
-    button {
-      flex: 1;
-      padding: 7px 10px;
-      border: none;
-      border-radius: 3px;
-      font-size: 12px;
-      cursor: pointer;
-      font-family: "Georgia", serif;
-      transition: background 0.15s, opacity 0.15s;
-    }
-
-    button:disabled {
-      opacity: 0.4;
-      cursor: not-allowed;
-    }
-
-    #btn-run {
-      background: var(--btn-primary-bg);
-      color: var(--btn-primary-text);
-    }
-
-    #btn-run:hover:not(:disabled) {
-      background: var(--btn-primary-bg-hover);
-    }
-
-    #btn-copy {
-      background: var(--btn-bg);
-      color: var(--text);
-    }
-
-    #btn-copy:hover:not(:disabled) {
-      background: var(--btn-bg-hover);
-    }
-
-    #btn-link, #btn-view, #btn-author, #btn-download-all, #btn-collaborators, #btn-issue {
-      width: 100%;
-      margin-top: 6px;
-      background: var(--btn-bg);
-      color: var(--text);
-    }
-
-    #btn-link:hover:not(:disabled), #btn-view:hover:not(:disabled), #btn-author:hover:not(:disabled), #btn-download-all:hover:not(:disabled), #btn-collaborators:hover:not(:disabled), #btn-issue:hover:not(:disabled) {
-      background: var(--btn-bg-hover);
-    }
-
-    #btn-qr {
-      width: 100%;
-      margin-top: 6px;
-      background: var(--btn-bg);
-      color: var(--text);
-    }
-
-    #btn-qr:hover:not(:disabled) {
-      background: var(--btn-bg-hover);
-    }
-
-    #qr-panel {
-      display: none;
-      margin-top: 8px;
+    /* Status banner */
+    #status-banner {
+      padding: 18px 20px 14px;
       text-align: center;
     }
 
-    #qr-panel.visible { display: block; }
+    #doi-box {
+      font-family: "SF Mono", "Menlo", "Courier New", monospace;
+      font-size: 11px;
+      color: var(--text-dim);
+      word-break: break-all;
+      line-height: 1.4;
+    }
 
-    /* Themed frame around the code — keeps the code itself pure black-on-
-       white (always scannable, regardless of theme) while still feeling
-       like part of the app instead of a stark white block. */
+    #doi-box.empty, #doi-box.error {
+      font-family: inherit;
+      font-size: 13px;
+      padding: 12px 4px;
+    }
+
+    #doi-box.empty { color: var(--text-dim); }
+    #doi-box.error { color: var(--err); }
+
+    .status-ring {
+      margin: 14px auto 8px;
+      width: 72px;
+      height: 72px;
+      border-radius: 50%;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      background: var(--btn-bg);
+      transition: background 0.2s;
+    }
+
+    .status-ring.ok { background: var(--ok-soft); }
+    .status-ring.err { background: var(--err-soft); }
+
+    .status-ring .ring-core {
+      width: 52px;
+      height: 52px;
+      border-radius: 50%;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 22px;
+      color: #fff;
+      background: var(--text-dim2);
+      box-shadow: 0 6px 14px rgba(0,0,0,0.18);
+      transition: background 0.2s;
+    }
+
+    .status-ring.ok .ring-core { background: var(--ok); }
+    .status-ring.err .ring-core { background: var(--err); }
+
+    .status-headline {
+      font-size: 16px;
+      font-weight: 700;
+      margin-top: 2px;
+    }
+
+    .quick-link-row { margin-top: 4px; }
+
+    #banner-copy-link {
+      background: none;
+      border: none;
+      font-size: 11px;
+      color: var(--text-dim2);
+      text-decoration: underline dotted;
+      cursor: pointer;
+      font-family: inherit;
+      padding: 2px;
+    }
+
+    #banner-copy-link:disabled { opacity: 0.4; cursor: not-allowed; text-decoration: none; }
+
+    #status-banner.collapsed .status-ring,
+    #status-banner.collapsed .status-headline,
+    #status-banner.collapsed .quick-link-row { display: none; }
+
+    #status-banner.collapsed #doi-box { padding: 18px 4px; }
+    #status-banner:not(.collapsed) #doi-box { opacity: 0.85; }
+
+    /* Tabs */
+    .tabs {
+      margin: 0 14px 10px;
+      background: var(--bg-panel-alt);
+      border-radius: 12px;
+      padding: 3px;
+      display: flex;
+      gap: 2px;
+    }
+
+    .tab-btn {
+      flex: 1;
+      padding: 8px 0;
+      border: none;
+      background: transparent;
+      color: var(--text-dim);
+      font-size: 12.5px;
+      font-weight: 600;
+      border-radius: 9px;
+      cursor: pointer;
+      font-family: inherit;
+      transition: background 0.15s, color 0.15s;
+    }
+
+    .tab-btn.active {
+      background: var(--bg-panel);
+      color: var(--text);
+      box-shadow: 0 1px 3px rgba(0,0,0,0.12);
+    }
+
+    .tab-panel { display: none; padding: 0 10px 8px; }
+    .tab-panel.active { display: block; }
+
+    /* Action rows */
+    button { font-family: inherit; border: none; cursor: pointer; }
+
+    .action-row {
+      width: 100%;
+      display: flex;
+      align-items: center;
+      gap: 11px;
+      background: none;
+      padding: 9px 6px;
+      border-radius: 10px;
+      cursor: pointer;
+      text-align: left;
+      color: var(--text);
+      transition: background 0.15s, opacity 0.15s;
+    }
+
+    .action-row:hover:not(:disabled) { background: var(--bg-row-hover); }
+    .action-row:disabled { opacity: 0.4; cursor: not-allowed; }
+
+    .action-icon {
+      width: 32px;
+      height: 32px;
+      border-radius: 50%;
+      background: var(--bg-panel-alt);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 14px;
+      flex-shrink: 0;
+    }
+
+    .action-icon.tone-accent { background: var(--ok-soft); color: var(--ok); }
+    .action-icon.tone-warn { background: var(--err-soft); color: var(--err); }
+    .action-icon.tone-search { background: var(--search-bg); color: var(--search-text); }
+
+    .action-text { flex: 1; min-width: 0; }
+    .action-title { font-size: 12.5px; font-weight: 600; }
+    .action-sub { font-size: 10.5px; color: var(--text-dim); margin-top: 1px; }
+    .action-row .chevron { color: var(--text-dim2); font-size: 12px; flex-shrink: 0; }
+
+    #btn-reveal, #btn-delete-corrupt, #btn-sage-pdf { display: none; }
+    #btn-reveal.visible, #btn-delete-corrupt.visible, #btn-sage-pdf.visible { display: flex; }
+
+    /* Expandable panels under their row (QR / References / Cited By / Related) */
+    .expand-panel { display: none; margin: 2px 4px 10px; }
+    .expand-panel.visible { display: block; }
+
+    #qr-panel { text-align: center; }
+
     #qr-frame {
       display: inline-block;
       background: var(--bg-panel);
       border: 1px solid var(--border);
-      border-radius: 10px;
-      padding: 10px;
+      border-radius: 14px;
+      padding: 12px;
+      box-shadow: var(--shadow);
     }
 
     #qr-code {
       background: #fff;
       display: inline-block;
       padding: 8px;
-      border-radius: 4px;
+      border-radius: 8px;
       line-height: 0;
     }
 
-    #qr-code svg {
-      width: 160px;
-      height: 160px;
-      display: block;
-    }
+    #qr-code svg { width: 150px; height: 150px; display: block; }
 
-    #qr-panel .hint {
-      margin-top: 6px;
-      font-size: 10.5px;
-      color: var(--text-dim);
-      font-style: italic;
-    }
+    #qr-panel .hint { margin-top: 8px; }
 
-    #btn-references {
-      width: 100%;
-      margin-top: 6px;
-      background: var(--btn-bg);
-      color: var(--text);
-    }
-
-    #btn-references:hover:not(:disabled) {
-      background: var(--btn-bg-hover);
-    }
-
-    #references-panel {
-      display: none;
-      margin-top: 6px;
-    }
-
-    #references-panel.visible { display: block; }
-
-    #references-list {
-      max-height: 140px;
+    .ref-scroll {
+      max-height: 150px;
       overflow-y: auto;
-      background: var(--bg-panel-alt);
+      background: var(--bg-panel);
       border: 1px solid var(--border);
-      border-radius: 4px;
+      border-radius: 12px;
       padding: 4px 8px;
     }
 
@@ -374,90 +429,20 @@
       display: flex;
       align-items: center;
       justify-content: space-between;
-      gap: 6px;
-      padding: 6px 4px;
+      gap: 8px;
+      padding: 8px 6px;
       border-bottom: 1px solid var(--border);
       cursor: pointer;
-      border-radius: 3px;
+      border-radius: 8px;
     }
 
     .ref-row:last-child { border-bottom: none; }
-
-    .ref-row:hover {
-      background: var(--bg-row-hover);
-    }
-
-    #btn-cited-by {
-      width: 100%;
-      margin-top: 6px;
-      background: var(--btn-bg);
-      color: var(--text);
-    }
-
-    #btn-cited-by:hover:not(:disabled) {
-      background: var(--btn-bg-hover);
-    }
-
-    #cited-by-panel {
-      display: none;
-      margin-top: 6px;
-    }
-
-    #cited-by-panel.visible { display: block; }
-
-    #cited-by-list {
-      max-height: 140px;
-      overflow-y: auto;
-      background: var(--bg-panel-alt);
-      border: 1px solid var(--border);
-      border-radius: 4px;
-      padding: 4px 8px;
-    }
-
-    #btn-related {
-      width: 100%;
-      margin-top: 6px;
-      background: var(--btn-bg);
-      color: var(--text);
-    }
-
-    #btn-related:hover:not(:disabled) {
-      background: var(--btn-bg-hover);
-    }
-
-    #related-panel {
-      display: none;
-      margin-top: 6px;
-    }
-
-    #related-panel.visible { display: block; }
-
-    #related-list {
-      max-height: 140px;
-      overflow-y: auto;
-      background: var(--bg-panel-alt);
-      border: 1px solid var(--border);
-      border-radius: 4px;
-      padding: 4px 8px;
-    }
-
-    #update-hint {
-      display: none;
-      text-align: center;
-      font-size: 11px;
-      color: var(--text-dim2);
-      text-decoration: underline dotted;
-      cursor: pointer;
-      margin-top: 2px;
-    }
-    #update-hint.visible {
-      display: block;
-    }
+    .ref-row:hover { background: var(--bg-row-hover); }
 
     .ref-title {
-      font-size: 11px;
+      font-size: 11.5px;
       color: var(--text);
-      line-height: 1.35;
+      line-height: 1.4;
       overflow: hidden;
       text-overflow: ellipsis;
       display: -webkit-box;
@@ -465,110 +450,17 @@
       -webkit-box-orient: vertical;
     }
 
-    .ref-open {
-      flex-shrink: 0;
-      color: var(--text-dim2);
-      font-size: 13px;
-      flex: none;
-    }
-
+    .ref-open { flex-shrink: 0; color: var(--text-dim2); font-size: 13px; }
     .ref-row:hover .ref-open { color: var(--text); }
 
-    #btn-reveal {
-      width: 100%;
-      margin-top: 6px;
-      background: var(--btn-bg);
-      color: var(--text);
-      display: none;
-    }
+    .hint { font-size: 11px; color: var(--text-dim); font-style: italic; }
 
-    #btn-reveal.visible { display: block; }
-
-    #btn-reveal:hover:not(:disabled) {
-      background: var(--btn-bg-hover);
-    }
-
-    #btn-delete-corrupt {
-      width: 100%;
-      margin-top: 6px;
-      background: var(--delete-bg);
-      color: var(--delete-text);
-      display: none;
-    }
-
-    #btn-delete-corrupt.visible { display: block; }
-
-    #btn-delete-corrupt:hover:not(:disabled) {
-      background: var(--delete-bg-hover);
-    }
-
-    #btn-sage-pdf {
-      width: 100%;
-      margin-top: 6px;
-      background: var(--btn-bg);
-      color: var(--text);
-      display: none;
-    }
-
-    #btn-sage-pdf.visible { display: block; }
-
-    #btn-sage-pdf:hover:not(:disabled) {
-      background: var(--btn-bg-hover);
-    }
-
-    #btn-search {
-      width: 100%;
-      margin-top: 6px;
-      background: var(--search-bg);
-      color: var(--search-text);
-    }
-
-    #btn-search:hover:not(:disabled) {
-      background: var(--search-bg-hover);
-    }
-
-    #status {
-      margin-top: 8px;
-      font-size: 11.5px;
-      color: var(--text-dim2);
-      min-height: 0;
-      text-align: center;
-      font-style: italic;
-    }
-
-    #status:empty { margin-top: 0; }
-
-    #status.ok { color: var(--ok); }
-    #status.err { color: var(--err); }
-
-    #log {
-      margin-top: 8px;
-      max-height: 90px;
-      overflow-y: auto;
-      background: var(--bg-panel-alt);
-      border: 1px solid var(--border);
-      border-radius: 4px;
-      padding: 6px 8px;
-      font-family: "Courier New", monospace;
-      font-size: 10.5px;
-      color: var(--text-faint);
-      line-height: 1.4;
-      display: none;
-    }
-
-    #log.visible { display: block; }
-    #log div.err-line { color: var(--err); }
-
-    .skeleton-ref-row {
-      padding: 6px 4px;
-      border-bottom: 1px solid var(--border);
-    }
-
+    .skeleton-ref-row { padding: 8px 6px; border-bottom: 1px solid var(--border); }
     .skeleton-ref-row:last-child { border-bottom: none; }
 
     .skeleton-bar {
       height: 9px;
-      border-radius: 3px;
+      border-radius: 5px;
       background: linear-gradient(90deg, var(--btn-bg) 25%, var(--border) 50%, var(--btn-bg) 75%);
       background-size: 200% 100%;
       animation: skeleton-pulse 1.4s ease-in-out infinite;
@@ -578,77 +470,200 @@
       0% { background-position: 200% 0; }
       100% { background-position: -200% 0; }
     }
+
+    /* Footer status/log — persistent across tabs */
+    #footer-status {
+      padding: 10px 16px 14px;
+      border-top: 1px solid var(--border);
+    }
+
+    #status {
+      font-size: 11px;
+      color: var(--text-dim2);
+      text-align: center;
+      min-height: 0;
+    }
+
+    #status:empty { margin: 0; }
+    #status.ok { color: var(--ok); }
+    #status.err { color: var(--err); }
+
+    #log {
+      margin-top: 8px;
+      max-height: 90px;
+      overflow-y: auto;
+      background: var(--bg-panel-alt);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 8px 10px;
+      font-family: "SF Mono", "Menlo", monospace;
+      font-size: 10.5px;
+      color: var(--text-faint);
+      line-height: 1.4;
+      display: none;
+    }
+
+    #log.visible { display: block; }
+    #log div.err-line { color: var(--err); }
+
+    #update-hint {
+      display: none;
+      text-align: center;
+      font-size: 10.5px;
+      color: var(--text-dim2);
+      text-decoration: underline dotted;
+      cursor: pointer;
+      margin-top: 8px;
+    }
+
+    #update-hint.visible { display: block; }
   </style>
   <script src="theme.js"></script>
   <script src="shortcuts.js"></script>
 </head>
 <body>
   <header>
-    <div class="dot"></div>
+    <div class="brand"><img src="icons/icon16.png" alt="" />DOI Grabber</div>
     <div class="spacer"></div>
-    <button id="btn-theme-toggle" title="Toggle theme" data-theme-icon>☀</button>
-    <button id="btn-settings" title="Settings">⚙</button>
+    <button id="btn-theme-toggle" class="icon-btn" title="Toggle theme" data-theme-icon>☀</button>
+    <button id="btn-settings" class="icon-btn" title="Settings">⚙</button>
   </header>
 
-  <div id="doi-box" class="empty">Scanning page…</div>
-
-  <div class="actions">
-    <button id="btn-run" disabled>Download</button>
-    <button id="btn-copy" disabled>Copy DOI</button>
+  <div id="status-banner">
+    <div id="doi-box" class="empty">Scanning page…</div>
+    <div class="status-ring" id="status-ring"><div class="ring-core" id="status-ring-icon">…</div></div>
+    <div class="status-headline" id="status-headline">Checking availability…</div>
+    <div class="quick-link-row"><button id="banner-copy-link">Copy Sci-Hub link</button></div>
   </div>
 
-  <button id="btn-link" disabled>Copy Sci-Hub Link</button>
+  <div class="tabs">
+    <button class="tab-btn active" data-tab="actions">Actions</button>
+    <button class="tab-btn" data-tab="explore">Explore</button>
+  </div>
 
-  <button id="btn-view" disabled>View on Sci-Hub</button>
+  <div class="tab-panel active" data-panel="actions">
+    <button id="btn-reveal" class="action-row">
+      <span class="action-icon tone-accent">📂</span>
+      <span class="action-text"><div class="action-title">Reveal in Finder</div></span>
+      <span class="chevron">›</span>
+    </button>
 
-  <button id="btn-sage-pdf">View Sage PDF (Open Access)</button>
+    <button id="btn-run" class="action-row" disabled>
+      <span class="action-icon tone-accent">⬇</span>
+      <span class="action-text">
+        <div class="action-title">Download</div>
+        <div class="action-sub">Save PDF to your output folder</div>
+      </span>
+      <span class="chevron">›</span>
+    </button>
 
-  <button id="btn-author" disabled>More by This Author</button>
+    <button id="btn-delete-corrupt" class="action-row">
+      <span class="action-icon tone-warn">🗑</span>
+      <span class="action-text"><div class="action-title">Delete Corrupt File</div></span>
+      <span class="chevron">›</span>
+    </button>
 
-  <button id="btn-download-all" disabled>Download All Works</button>
+    <button id="btn-copy" class="action-row" disabled>
+      <span class="action-icon">⧉</span>
+      <span class="action-text"><div class="action-title">Copy DOI</div></span>
+      <span class="chevron">›</span>
+    </button>
 
-  <button id="btn-collaborators" disabled>Common Collaborators</button>
+    <button id="btn-link" class="action-row" disabled>
+      <span class="action-icon">🔗</span>
+      <span class="action-text"><div class="action-title">Copy Sci-Hub Link</div></span>
+      <span class="chevron">›</span>
+    </button>
 
-  <button id="btn-issue" disabled>Download This Issue</button>
+    <button id="btn-view" class="action-row" disabled>
+      <span class="action-icon">↗</span>
+      <span class="action-text"><div class="action-title">View on Sci-Hub</div></span>
+      <span class="chevron">›</span>
+    </button>
 
-  <button id="btn-qr" disabled>QR Code</button>
+    <button id="btn-sage-pdf" class="action-row">
+      <span class="action-icon">📄</span>
+      <span class="action-text"><div class="action-title">View Sage PDF (Open Access)</div></span>
+      <span class="chevron">›</span>
+    </button>
 
-  <div id="qr-panel">
-    <div id="qr-frame">
-      <div id="qr-code"></div>
+    <button id="btn-search" class="action-row" disabled>
+      <span class="action-icon tone-search">🔍</span>
+      <span class="action-text"><div class="action-title">Search Google Instead</div></span>
+      <span class="chevron">›</span>
+    </button>
+  </div>
+
+  <div class="tab-panel" data-panel="explore">
+    <button id="btn-author" class="action-row" disabled>
+      <span class="action-icon">👤</span>
+      <span class="action-text"><div class="action-title">More by This Author</div></span>
+      <span class="chevron">›</span>
+    </button>
+
+    <button id="btn-download-all" class="action-row" disabled>
+      <span class="action-icon">📚</span>
+      <span class="action-text"><div class="action-title">Download All Works</div></span>
+      <span class="chevron">›</span>
+    </button>
+
+    <button id="btn-collaborators" class="action-row" disabled>
+      <span class="action-icon">🤝</span>
+      <span class="action-text"><div class="action-title">Common Collaborators</div></span>
+      <span class="chevron">›</span>
+    </button>
+
+    <button id="btn-issue" class="action-row" disabled>
+      <span class="action-icon">📖</span>
+      <span class="action-text"><div class="action-title">Download This Issue</div></span>
+      <span class="chevron">›</span>
+    </button>
+
+    <button id="btn-qr" class="action-row" disabled>
+      <span class="action-icon">▦</span>
+      <span class="action-text"><div class="action-title">QR Code</div></span>
+      <span class="chevron">›</span>
+    </button>
+    <div id="qr-panel" class="expand-panel">
+      <div id="qr-frame">
+        <div id="qr-code"></div>
+      </div>
+      <div class="hint">Scan with a phone/tablet camera to open this article on Sci-Hub.</div>
     </div>
-    <div class="hint">Scan with a phone/tablet camera to open this article on Sci-Hub.</div>
+
+    <button id="btn-references" class="action-row" disabled>
+      <span class="action-icon">📑</span>
+      <span class="action-text"><div class="action-title">References</div></span>
+      <span class="chevron">›</span>
+    </button>
+    <div id="references-panel" class="expand-panel">
+      <div id="references-list" class="ref-scroll"></div>
+    </div>
+
+    <button id="btn-cited-by" class="action-row" disabled>
+      <span class="action-icon">📈</span>
+      <span class="action-text"><div class="action-title">Cited By</div></span>
+      <span class="chevron">›</span>
+    </button>
+    <div id="cited-by-panel" class="expand-panel">
+      <div id="cited-by-list" class="ref-scroll"></div>
+    </div>
+
+    <button id="btn-related" class="action-row" disabled>
+      <span class="action-icon">🧭</span>
+      <span class="action-text"><div class="action-title">Related Papers</div></span>
+      <span class="chevron">›</span>
+    </button>
+    <div id="related-panel" class="expand-panel">
+      <div id="related-list" class="ref-scroll"></div>
+    </div>
   </div>
 
-  <button id="btn-references" disabled>References</button>
-
-  <div id="references-panel">
-    <div id="references-list"></div>
+  <div id="footer-status">
+    <div id="status"></div>
+    <div id="update-hint"></div>
+    <div id="log"></div>
   </div>
-
-  <button id="btn-cited-by" disabled>Cited By</button>
-
-  <div id="cited-by-panel">
-    <div id="cited-by-list"></div>
-  </div>
-
-  <button id="btn-related" disabled>Related Papers</button>
-
-  <div id="related-panel">
-    <div id="related-list"></div>
-  </div>
-
-  <button id="btn-reveal">Reveal in Finder</button>
-
-  <button id="btn-delete-corrupt">Delete Corrupt File</button>
-
-  <button id="btn-search" disabled>Search Google Instead</button>
-
-  <div id="status"></div>
-
-  <div id="update-hint"></div>
-
-  <div id="log"></div>
 
   <script src="vendor/qrcode.js"></script>
   <script src="popup.js"></script>

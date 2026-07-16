@@ -25,6 +25,11 @@ const relatedList = document.getElementById("related-list");
 const btnIssue = document.getElementById("btn-issue");
 const statusEl  = document.getElementById("status");
 const logEl     = document.getElementById("log");
+const statusBanner = document.getElementById("status-banner");
+const statusRing = document.getElementById("status-ring");
+const statusRingIcon = document.getElementById("status-ring-icon");
+const statusHeadline = document.getElementById("status-headline");
+const bannerCopyLink = document.getElementById("banner-copy-link");
 
 let currentDOI = null;
 let currentTitle = "";
@@ -83,16 +88,36 @@ function sagePdfUrl(doi) {
   return `https://journals.sagepub.com/doi/pdf/${doi}`;
 }
 
+// Reflects the same available/unavailable/unknown tri-state already used to
+// enable btnView and show btnSagePdf onto the status banner's ring + headline.
+function setAvailabilityUI(status) {
+  statusRing.classList.remove("ok", "err");
+  if (status === "available") {
+    statusRing.classList.add("ok");
+    statusRingIcon.textContent = "✓";
+    statusHeadline.textContent = "Available on Sci-Hub";
+  } else if (status === "unavailable") {
+    statusRing.classList.add("err");
+    statusRingIcon.textContent = "✕";
+    statusHeadline.textContent = "Not available on Sci-Hub";
+  } else {
+    statusRingIcon.textContent = "…";
+    statusHeadline.textContent = "Checking availability…";
+  }
+}
+
 function refreshViewButton() {
   if (!currentDOI || currentTabId == null) {
     btnView.disabled = true;
     btnSagePdf.classList.remove("visible");
+    setAvailabilityUI(null);
     return;
   }
   chrome.runtime.sendMessage({ action: "getTabState", tabId: currentTabId }, (state) => {
     btnView.disabled = !state || state.status !== "available";
     const showSage = !!state && state.status === "unavailable" && isSageDOI(currentDOI);
     btnSagePdf.classList.toggle("visible", showSage);
+    setAvailabilityUI(state ? state.status : null);
   });
 }
 
@@ -100,6 +125,7 @@ function showDOI(doi) {
   currentDOI = doi;
   doiBox.textContent = doi;
   doiBox.className = "";
+  statusBanner.classList.remove("collapsed");
   btnRun.disabled = false;
   btnCopy.disabled = false;
   btnLink.disabled = false;
@@ -163,6 +189,7 @@ function showDOI(doi) {
 function showEmpty() {
   doiBox.textContent = "No DOI found on this page.";
   doiBox.className = "empty";
+  statusBanner.classList.add("collapsed");
   btnRun.disabled = true;
   btnCopy.disabled = true;
   btnLink.disabled = true;
@@ -182,6 +209,7 @@ function showEmpty() {
 function showError(msg) {
   doiBox.textContent = msg;
   doiBox.className = "error";
+  statusBanner.classList.add("collapsed");
   btnRun.disabled = true;
   btnCopy.disabled = true;
   btnLink.disabled = true;
@@ -661,6 +689,22 @@ chrome.storage.local.get(["updateInfo"], ({ updateInfo }) => {
 updateHintEl.addEventListener("click", () => {
   chrome.tabs.create({ url: chrome.runtime.getURL("options.html") + "#updates" });
 });
+
+// Actions / Explore tab switching (popup-only, no dependency on background.js)
+document.querySelectorAll(".tab-btn").forEach((btn) => {
+  btn.addEventListener("click", () => {
+    document.querySelectorAll(".tab-btn").forEach((b) => b.classList.remove("active"));
+    document.querySelectorAll(".tab-panel").forEach((p) => p.classList.remove("active"));
+    btn.classList.add("active");
+    document.querySelector(`.tab-panel[data-panel="${btn.dataset.tab}"]`).classList.add("active");
+  });
+});
+
+// Status banner's quick link just proxies to the real "Copy Sci-Hub Link"
+// row so there's one source of truth for the resolve-and-copy logic; clicking
+// while btnLink is disabled (no DOI, or a resolve already in flight) is a
+// no-op since disabled buttons don't dispatch click via .click().
+bannerCopyLink.addEventListener("click", () => btnLink.click());
 
 // Run on popup open
 scanPage();
