@@ -381,6 +381,8 @@
     .action-icon.tone-warn { background: var(--err-soft); color: var(--err); }
     .action-icon.tone-search { background: var(--search-bg); color: var(--search-text); }
 
+    .action-icon svg { width: 16px; height: 16px; stroke: currentColor; color: var(--text-dim); }
+
     .action-text { flex: 1; min-width: 0; }
     .action-title { font-size: 12.5px; font-weight: 600; }
     .action-sub { font-size: 10.5px; color: var(--text-dim); margin-top: 1px; }
@@ -596,25 +598,25 @@
 
   <div class="tab-panel" data-panel="explore">
     <button id="btn-author" class="action-row" disabled>
-      <span class="action-icon">👤</span>
+      <span class="action-icon"><svg viewBox="0 0 24 24" fill="none" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="8" r="3.4"/><path d="M5 20c0-3.6 3.1-6.2 7-6.2s7 2.6 7 6.2"/></svg></span>
       <span class="action-text"><div class="action-title">More by This Author</div></span>
       <span class="chevron">›</span>
     </button>
 
     <button id="btn-download-all" class="action-row" disabled>
-      <span class="action-icon">📚</span>
+      <span class="action-icon"><svg viewBox="0 0 24 24" fill="none" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="4.5" width="16" height="4" rx="1"/><rect x="4" y="10" width="16" height="4" rx="1"/><rect x="4" y="15.5" width="16" height="4" rx="1"/></svg></span>
       <span class="action-text"><div class="action-title">Download All Works</div></span>
       <span class="chevron">›</span>
     </button>
 
     <button id="btn-collaborators" class="action-row" disabled>
-      <span class="action-icon">🤝</span>
+      <span class="action-icon"><svg viewBox="0 0 24 24" fill="none" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><circle cx="7" cy="7" r="3"/><circle cx="17" cy="17" r="3"/><line x1="9.2" y1="9.2" x2="14.8" y2="14.8"/></svg></span>
       <span class="action-text"><div class="action-title">Common Collaborators</div></span>
       <span class="chevron">›</span>
     </button>
 
     <button id="btn-issue" class="action-row" disabled>
-      <span class="action-icon">📖</span>
+      <span class="action-icon"><svg viewBox="0 0 24 24" fill="none" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="4" width="16" height="16" rx="1.5"/><line x1="12" y1="4" x2="12" y2="20"/></svg></span>
       <span class="action-text"><div class="action-title">Download This Issue</div></span>
       <span class="chevron">›</span>
     </button>
@@ -632,7 +634,7 @@
     </div>
 
     <button id="btn-references" class="action-row" disabled>
-      <span class="action-icon">📑</span>
+      <span class="action-icon"><svg viewBox="0 0 24 24" fill="none" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><rect x="5" y="3" width="14" height="18" rx="1.5"/><line x1="8" y1="8" x2="16" y2="8"/><line x1="8" y1="12" x2="16" y2="12"/><line x1="8" y1="16" x2="13" y2="16"/></svg></span>
       <span class="action-text"><div class="action-title">References</div></span>
       <span class="chevron">›</span>
     </button>
@@ -641,7 +643,7 @@
     </div>
 
     <button id="btn-cited-by" class="action-row" disabled>
-      <span class="action-icon">📈</span>
+      <span class="action-icon"><svg viewBox="0 0 24 24" fill="none" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><polyline points="4,17 9,11 13,14 20,6"/><polyline points="14,6 20,6 20,12"/></svg></span>
       <span class="action-text"><div class="action-title">Cited By</div></span>
       <span class="chevron">›</span>
     </button>
@@ -650,7 +652,7 @@
     </div>
 
     <button id="btn-related" class="action-row" disabled>
-      <span class="action-icon">🧭</span>
+      <span class="action-icon"><svg viewBox="0 0 24 24" fill="none" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="5" r="2.2"/><circle cx="5" cy="17" r="2.2"/><circle cx="19" cy="17" r="2.2"/><line x1="12" y1="7.2" x2="6.3" y2="15.3"/><line x1="12" y1="7.2" x2="17.7" y2="15.3"/><line x1="7.2" y1="17" x2="16.8" y2="17"/></svg></span>
       <span class="action-text"><div class="action-title">Related Papers</div></span>
       <span class="chevron">›</span>
     </button>
