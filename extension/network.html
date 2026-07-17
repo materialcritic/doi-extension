@@ -1,0 +1,346 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>DOI Grabber — Author Network Map</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+
+    :root {
+      --bg: #17171a;
+      --surface: #212126;
+      --surface-2: #2a2a30;
+      --border: #34343c;
+      --text: #ece9e4;
+      --text-dim: #9d9a94;
+      --accent: #c98a4b;
+      --err: #e0574a;
+      --ok: #6fae6f;
+    }
+
+    :root[data-theme="parchment"] {
+      --bg: #f2ece0;
+      --surface: #ffffff;
+      --surface-2: #e7ddc8;
+      --border: #d8cbae;
+      --text: #2a2723;
+      --text-dim: #726a5c;
+      --accent: #b4783c;
+      --err: #c0392b;
+      --ok: #4c7a3f;
+    }
+
+    :root[data-theme="slate"] {
+      --bg: #eef1f4;
+      --surface: #ffffff;
+      --surface-2: #e3e8ee;
+      --border: #d3dae3;
+      --text: #23282f;
+      --text-dim: #6b7280;
+      --accent: #4f6d8f;
+      --err: #c0392b;
+      --ok: #3f7d5c;
+    }
+
+    :root[data-theme="sage"] {
+      --bg: #f0f2ec;
+      --surface: #ffffff;
+      --surface-2: #e4e8dc;
+      --border: #d4dac6;
+      --text: #262b22;
+      --text-dim: #6f7566;
+      --accent: #6b8e5a;
+      --err: #c0392b;
+      --ok: #4c7a3f;
+    }
+
+    :root[data-theme="minimal"] {
+      --bg: #ffffff;
+      --surface: #f7f7f7;
+      --surface-2: #f0f0f0;
+      --border: #dddddd;
+      --text: #111111;
+      --text-dim: #6e6e6e;
+      --accent: #111111;
+      --err: #b3261e;
+      --ok: #2e7d32;
+    }
+
+    :root[data-theme="carrot"] {
+      --bg: #fdf3e7;
+      --surface: #ffffff;
+      --surface-2: #fbe4c4;
+      --border: #f0c98a;
+      --text: #3a2410;
+      --text-dim: #8a6a3c;
+      --accent: #e8752c;
+      --err: #c0392b;
+      --ok: #4c7a3f;
+    }
+
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      padding: 32px;
+      max-width: 920px;
+      margin: 0 auto;
+    }
+
+    header { margin-bottom: 20px; display: flex; align-items: flex-start; gap: 12px; }
+    header .header-text { flex: 1; }
+    header h1 { font-size: 20px; font-weight: 600; }
+    header p { font-size: 12.5px; color: var(--text-dim); margin-top: 4px; }
+
+    #btn-theme-toggle {
+      background: var(--surface-2);
+      border: 1px solid var(--border);
+      color: var(--text);
+      width: 36px;
+      height: 36px;
+      border-radius: 8px;
+      font-size: 13px;
+      cursor: pointer;
+      flex-shrink: 0;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 0;
+      line-height: 1;
+    }
+
+    #btn-theme-toggle:hover { background: var(--surface); }
+
+    button {
+      font-family: inherit;
+      cursor: pointer;
+    }
+
+    .card {
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      background: var(--surface);
+      padding: 16px;
+      margin-bottom: 16px;
+    }
+
+    .card h2 { font-size: 13.5px; font-weight: 600; margin-bottom: 4px; }
+    .card .hint { font-size: 11.5px; color: var(--text-dim); margin-bottom: 12px; }
+
+    .seed-row {
+      display: flex;
+      gap: 8px;
+      margin-bottom: 8px;
+    }
+
+    .seed-row input {
+      flex: 1;
+      background: var(--surface-2);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 8px 10px;
+      font-size: 13px;
+      color: var(--text);
+      font-family: inherit;
+    }
+
+    .seed-row button {
+      background: none;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      color: var(--text-dim);
+      width: 34px;
+      flex-shrink: 0;
+      font-size: 14px;
+    }
+
+    .seed-row button:hover { background: var(--surface-2); color: var(--err); }
+
+    .card .actions {
+      display: flex;
+      gap: 8px;
+      margin-top: 12px;
+      align-items: center;
+      flex-wrap: wrap;
+    }
+
+    .btn-primary {
+      background: var(--accent);
+      color: var(--bg);
+      border: none;
+      border-radius: 8px;
+      padding: 9px 16px;
+      font-size: 12.5px;
+      font-weight: 600;
+    }
+
+    .btn-primary:disabled { opacity: 0.4; cursor: not-allowed; }
+
+    .btn-secondary {
+      background: var(--surface-2);
+      border: 1px solid var(--border);
+      color: var(--text);
+      border-radius: 8px;
+      padding: 9px 16px;
+      font-size: 12.5px;
+      font-weight: 600;
+    }
+
+    .btn-secondary:hover { background: var(--border); }
+    .btn-secondary:disabled { opacity: 0.4; cursor: not-allowed; }
+
+    #add-seed-row { display: flex; gap: 8px; }
+    #add-seed-row input {
+      flex: 1;
+      max-width: 260px;
+      background: var(--surface-2);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 7px 10px;
+      font-size: 12.5px;
+      color: var(--text);
+      font-family: inherit;
+    }
+
+    #status-line { font-size: 11.5px; color: var(--text-dim); }
+    #status-line.error { color: var(--err); }
+
+    .zoom-btn {
+      width: 32px;
+      padding: 9px 0;
+      text-align: center;
+      font-size: 15px;
+      line-height: 1;
+    }
+
+    #zoom-level {
+      font-size: 11.5px;
+      color: var(--text-dim);
+      font-family: "SF Mono", "Courier New", monospace;
+      min-width: 38px;
+      text-align: center;
+    }
+
+    #graph-wrap {
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      background: var(--surface);
+      padding: 12px;
+      overflow: auto;
+      max-height: 75vh;
+      cursor: grab;
+    }
+
+    #graph-wrap.panning { cursor: grabbing; user-select: none; }
+
+    #graph-wrap svg { display: block; }
+
+    .net-node-label {
+      font-size: 9.5px;
+      fill: var(--text-dim);
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
+    }
+
+    .net-node.seed .net-node-label { fill: var(--text); font-weight: 600; }
+
+    .net-node circle.node-dot {
+      fill: var(--accent);
+      opacity: 0.85;
+      transition: opacity 0.15s, stroke-width 0.15s;
+      cursor: pointer;
+    }
+
+    .net-node.seed circle.node-dot { fill: var(--text); }
+    .net-node.expanded circle.node-dot { stroke: var(--ok); stroke-width: 2; }
+    .net-node.loading circle.node-dot { stroke: var(--accent); stroke-width: 2; stroke-dasharray: 3 2; }
+    .net-node:not(.expanded):not(.loading) circle.node-dot { stroke: var(--text-dim); stroke-width: 1; stroke-dasharray: 2 2; }
+
+    .net-node:hover circle.node-dot { opacity: 1; }
+    .net-node:hover .net-node-label { fill: var(--text); }
+
+    .node-open-link {
+      opacity: 0.7;
+    }
+    .node-open-link:hover { opacity: 1; }
+    .node-open-link text { fill: var(--accent); font-size: 8px; }
+
+    #legend {
+      display: flex;
+      gap: 16px;
+      flex-wrap: wrap;
+      font-size: 11px;
+      color: var(--text-dim);
+      margin-top: 10px;
+    }
+
+    #legend span { display: inline-flex; align-items: center; gap: 5px; }
+    #legend .dot { width: 8px; height: 8px; border-radius: 50%; display: inline-block; }
+    #legend .dot.seed-dot { background: var(--text); }
+    #legend .dot.expanded-dot { background: var(--accent); border: 2px solid var(--ok); }
+    #legend .dot.collapsed-dot { background: var(--accent); border: 1px dashed var(--text-dim); }
+
+    #empty-graph {
+      padding: 60px 0;
+      text-align: center;
+      color: var(--text-dim);
+      font-size: 13px;
+    }
+  </style>
+  <script src="theme.js"></script>
+</head>
+<body>
+  <header>
+    <div class="header-text">
+      <h1>Author Network Map</h1>
+      <p>Start from a few authors, then click any node to pull in their collaborators and expand the map outward.</p>
+    </div>
+    <button id="btn-theme-toggle" title="Toggle theme" data-theme-icon>☀</button>
+  </header>
+
+  <div class="card" id="seed-card">
+    <h2>Seed Authors</h2>
+    <div class="hint">
+      Enter two or more names to start mapping a group's shared collaborators. Name-based matching can conflate
+      people who share a name — verify results, especially for common names.
+    </div>
+    <div id="seed-rows"></div>
+    <div class="actions">
+      <button class="btn-secondary" id="btn-add-seed-field">+ Add Another Author</button>
+      <button class="btn-primary" id="btn-build" disabled>Build Network</button>
+      <span id="status-line"></span>
+    </div>
+  </div>
+
+  <div class="card" id="graph-card" style="display: none;">
+    <h2 id="graph-title">Network</h2>
+    <div class="hint">
+      Click a dashed node to pull in their collaborators (up to 15, by shared works). A solid green ring means
+      already expanded. Click the small ↗ next to a name to open their Download-All-Works page.
+    </div>
+    <div class="actions" style="margin-top: -6px; margin-bottom: 12px;">
+      <div id="add-seed-row">
+        <input type="text" id="add-seed-input" placeholder="Add another seed author…">
+      </div>
+      <button class="btn-secondary" id="btn-add-seed-live">Add to Map</button>
+      <button class="btn-secondary" id="btn-reset">Start New Map</button>
+      <span id="graph-status-line"></span>
+    </div>
+    <div class="actions" id="zoom-toolbar" style="display: none; margin-top: -4px; margin-bottom: 10px;">
+      <button class="btn-secondary zoom-btn" id="btn-zoom-out" title="Zoom out">−</button>
+      <span id="zoom-level">100%</span>
+      <button class="btn-secondary zoom-btn" id="btn-zoom-in" title="Zoom in">+</button>
+      <button class="btn-secondary" id="btn-zoom-fit">Fit to View</button>
+      <button class="btn-secondary" id="btn-zoom-reset">Reset Zoom</button>
+      <span class="hint" style="margin: 0;">Scroll to pan · Ctrl/⌘ + scroll or pinch to zoom</span>
+    </div>
+    <div id="graph-wrap"><div id="empty-graph">Nothing to show yet.</div></div>
+    <div id="legend">
+      <span><span class="dot seed-dot"></span> Seed author</span>
+      <span><span class="dot expanded-dot"></span> Expanded (collaborators loaded)</span>
+      <span><span class="dot collapsed-dot"></span> Click to expand</span>
+    </div>
+  </div>
+
+  <script src="network.js"></script>
+</body>
+</html>

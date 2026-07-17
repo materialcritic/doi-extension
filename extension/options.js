@@ -602,6 +602,10 @@ btnExportBackup.addEventListener("click", async () => {
   }
 });
 
+document.getElementById("btn-open-network-map").addEventListener("click", () => {
+  chrome.tabs.create({ url: chrome.runtime.getURL("network.html") });
+});
+
 document.getElementById("btn-report-bug").addEventListener("click", () => {
   chrome.tabs.create({ url: chrome.runtime.getURL("report.html") });
 });
