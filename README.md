@@ -28,6 +28,7 @@ This is a **personal, single-machine tool** — it is not published on the Chrom
   - [Download This Issue](#download-this-issue)
   - [Download Entire Journal](#download-entire-journal)
   - [Similar Papers](#similar-papers)
+  - [Author Network Map](#author-network-map)
 - [Settings page](#settings-page)
 - [Keeping it up to date](#keeping-it-up-to-date)
 - [Reporting a bug or requesting a feature](#reporting-a-bug-or-requesting-a-feature)
@@ -49,7 +50,7 @@ Open any academic paper's page (a journal site, a DOI resolver link, PhilPapers,
    - **The publisher's own landing page** (looks for a `citation_pdf_url` meta tag or a direct PDF link, if Unpaywall also has nothing)
 4. If it's still unavailable, offers **fallbacks**: search Google for the title + author, search Google Scholar for the author, or (for SAGE papers specifically) jump straight to SAGE's own PDF viewer in case it's actually open-access.
 
-On top of the single-paper flow, it also has full pages for **bulk-downloading** an author's entire output, an entire journal issue, or an entire journal; browsing a paper's **references** and **citations**; finding **similar/related papers**; and **watching** a journal or author for new releases.
+On top of the single-paper flow, it also has full pages for **bulk-downloading** an author's entire output, an entire journal issue, or an entire journal; browsing a paper's **references** and **citations**; finding **similar/related papers**; **watching** a journal or author for new releases; mapping out a **collaboration network** starting from a group of authors; and **exporting** your download history as a citation file (BibTeX/RIS) or a full settings/history backup.
 
 ## How it's built
 
@@ -237,11 +238,13 @@ Searches Crossref for every work matching the detected author's name (up to 1,00
 
 ### Common Collaborators
 
-Same underlying author search, but tallies co-author frequency into a ranked list (excluding the target author themselves), each linking to that person's own author page. A radial network graph — the target author in the center, their top 20 collaborators arranged around them, with lines to collaborators who also worked together directly — is shown open by default above the list; use **"Hide Network Graph"** to collapse it if you just want the list.
+Same underlying author search, but tallies co-author frequency into a ranked list (excluding the target author themselves), each linking to that person's own author page. A radial network graph — the target author in the center, their top 20 collaborators arranged around them, with lines to collaborators who also worked together directly — is shown open by default above the list; use **"Hide Network Graph"** to collapse it if you just want the list. (Also reachable from the "Common Collaborators" button on the [Download All Works](#more-by-this-author) page's own header, next to Google Scholar/Institutional Website — not just from the popup.)
+
+This is a single-author view. To map out how a *group* of people connect to each other — not just one person's own collaborators — see [Author Network Map](#author-network-map).
 
 ### Download This Issue
 
-Given any paper, resolves its journal/volume/issue via Crossref and lists every article in that issue with the same batch-download UI as the author page (checklist, skip-already-downloaded, retry-failed, progress bar). Also supports:
+Given any paper, resolves its journal/volume/issue via Crossref and lists every article in that issue with the same batch-download UI as the author page (checklist, skip-already-downloaded, retry-failed, progress bar). Every listed author's name is clickable, opening their own [Download All Works](#more-by-this-author) page. Also supports:
 - **Batch Download Multiple Issues** — a volume range (up to 50) at a fixed issue number
 - **Search This Journal** — keyword search scoped to just this journal, with sortable/paginated results and a "Download All Matches" button
 - **Watch This Journal** — notifies you when a new issue appears (checked every 6 hours)
@@ -253,13 +256,28 @@ Opens its own tab (since walking an entire journal can mean thousands of article
 
 ### Similar Papers
 
-A **"Find Similar"** link next to any paper's title (on the author/issue/journal pages) does lightweight keyword extraction from its abstract (or title, if no abstract) and opens a new results page built on Crossref's bibliographic search — using the same batch-download UI as everywhere else. Results can chain into further similarity searches.
+A **"Find Similar"** link next to any paper's title (on the author/issue/journal pages) does lightweight keyword extraction from its abstract (or title, if no abstract) and opens a new results page built on Crossref's bibliographic search — using the same batch-download UI as everywhere else. Results can chain into further similarity searches. Author names here are clickable too, same as on the issue page.
+
+### Author Network Map
+
+Opened via Settings → **Tools** → **Open Author Network Map** (its own tab, not launched from the popup). Start from **two or more** seed author names; the map immediately pulls in each seed's direct collaborators from Crossref and lays them out in concentric rings by hop distance from the seeds. From there:
+
+- **Click-to-expand** — any dashed (unexpanded) node pulls in *its* collaborators too (up to 15, by shared works) when clicked, growing the map outward one hop at a time under your control rather than an expensive automatic multi-hop crawl. A solid green ring means a node's already been expanded. Two seeds who share a collaborator collapse into one shared node, not a duplicate.
+- **Node size = real prominence, not graph position** — sized and ranked by the person's actual OpenAlex citation count, not by how many edges they happen to have in the current map, so a major author renders large immediately even before anyone's expanded them, and a node's size doesn't shift just because you expanded somewhere else. Hover any node for the exact citation/works-count figures plus how many shared works connect them *within this map*.
+- **Highlight the path between two people** — pick two names and click "Highlight Path" to see the shortest route connecting them through the map, with a hop-count readout. Reports plainly if they aren't connected yet.
+- **Click an edge to see the actual shared papers** — not just a count. Opens a panel listing title/year/DOI for every paper two connected people co-authored, each with its own Download button (wired into the same download flow as everywhere else), saved to a dedicated subfolder.
+- **Search and focus** — a search box jumps to and highlights a person by name; focus mode fades everything more than N hops from a chosen person, for orienting yourself in a large map.
+- **Zoomable and pannable** — `+`/`−` buttons, "Fit to View," Ctrl/⌘+scroll or trackpad pinch to zoom (cursor-anchored), click-and-drag to pan.
+- The whole map autosaves as you build it and resumes where you left off next time you open the page; **"Start New Map"** clears it.
+
+Same name-based-matching caveat as the rest of the extension's author tools — Crossref/OpenAlex name search can conflate two different real people who share a name, especially common ones.
 
 ## Settings page
 
 Right-click the toolbar icon → **Options** (or click ⚙ in the popup):
 
 - **Appearance** — 6 color themes: Dark (default), Warm Parchment, Cool Slate, Soft Sage, Pure Minimal, Carrot
+- **Tools** — **Open Author Network Map**; see [Author Network Map](#author-network-map)
 - **Connection** — output folder, Python interpreter path, script path, Sci-Hub mirror list, Unpaywall contact email (see [Installation](#3-point-the-extension-at-your-python-setup))
 - **Keyboard Shortcuts** — read-only view of the current Alt+D/Alt+F bindings, with a link to Chrome's remap page
 - **Popup Shortcuts** — reassign any of the single-key popup shortcuts
@@ -270,7 +288,9 @@ Right-click the toolbar icon → **Options** (or click ⚙ in the popup):
 - **Updates** — check for and install new versions from GitHub; see [Keeping it up to date](#keeping-it-up-to-date)
 - **Backup & Support**:
   - **Export Everything** — bundles your settings, watchlists, download history, and mirror health into a downloadable `.zip`
+  - **Import Backup** — restores settings, watchlists, download history, and mirror health from a zip created by Export Everything. Overwrites your current state, so use with care.
   - **Report a Bug/Feature Request** — see below
+- **Citation Export** — builds a BibTeX or RIS file covering every paper you've successfully downloaded, with metadata fetched fresh from Crossref per paper (title/author/journal/year), for importing into Zotero, Mendeley, or another reference manager. Can take a while for a large library, since it's one lookup per paper.
 
 ## Keeping it up to date
 
@@ -308,13 +328,14 @@ doi-extension/
 │   ├── issue.html / issue.js      # "Download This Issue" page
 │   ├── journal-download.html/.js  # "Download Entire Journal" page
 │   ├── search.html / search.js    # "Similar Papers" results page
+│   ├── network.html / network.js  # "Author Network Map" page
 │   ├── report.html / report.js    # Bug/feature report form
 │   ├── theme.js                   # Shared 6-palette color theme system
 │   ├── shortcuts.js                # Shared popup-shortcut definitions
 │   ├── keywords.js                 # Shared keyword-extraction for "Find Similar"
 │   ├── scihub-fullscreen.js       # Content script: auto-expands the PDF viewer on Sci-Hub mirrors
 │   ├── vendor/qrcode.js           # Vendored offline QR encoder
-│   ├── vendor/zipwriter.js        # Vendored zero-dependency ZIP writer (for Export Everything)
+│   ├── vendor/zipwriter.js        # Vendored zero-dependency ZIP reader/writer (Export Everything / Import Backup)
 │   └── icons/                     # Toolbar icon (16/48/128px)
 ├── native-host/
 │   ├── doi_host.py                 # Native Messaging host — spawns scihub_download.py, streams
