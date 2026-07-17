@@ -264,6 +264,90 @@
     .node-open-link:hover { opacity: 1; }
     .node-open-link text { fill: var(--accent); font-size: 8px; }
 
+    .nav-toolbar { display: none; flex-direction: column; gap: 8px; margin-bottom: 12px; }
+    .nav-row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+    .nav-row .nav-label { font-size: 11.5px; color: var(--text-dim); flex-shrink: 0; min-width: 46px; }
+
+    .nav-row input[type="text"], .nav-row select, .nav-row input[type="number"] {
+      background: var(--surface-2);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 7px 10px;
+      font-size: 12.5px;
+      color: var(--text);
+      font-family: inherit;
+    }
+
+    .nav-row select { max-width: 200px; }
+    .nav-row input[type="number"] { width: 56px; }
+    .nav-row input[type="text"] { flex: 1; min-width: 140px; max-width: 260px; }
+
+    #search-results {
+      display: flex;
+      gap: 6px;
+      flex-wrap: wrap;
+    }
+
+    #search-results button {
+      background: var(--surface-2);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      color: var(--text);
+      font-size: 11.5px;
+      padding: 5px 9px;
+    }
+
+    #search-results button:hover { background: var(--border); }
+
+    #path-readout, #focus-readout, #search-status { font-size: 11.5px; color: var(--text-dim); }
+    #path-readout.error, #search-status.error { color: var(--err); }
+
+    .net-node.faded { opacity: 0.15; transition: opacity 0.15s; }
+    .net-node.on-path circle.node-dot { stroke: var(--accent) !important; stroke-width: 3 !important; stroke-dasharray: none !important; }
+    .net-node.search-hit circle.node-dot { animation: search-pulse 1.4s ease-out 2; }
+
+    @keyframes search-pulse {
+      0% { stroke: var(--accent); stroke-width: 2; stroke-opacity: 1; }
+      100% { stroke: var(--accent); stroke-width: 14; stroke-opacity: 0; }
+    }
+
+    .edge-line { cursor: pointer; }
+
+    #joint-works-panel {
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      background: var(--surface);
+      padding: 16px;
+      margin-top: 16px;
+    }
+
+    #joint-works-panel h3 { font-size: 13.5px; font-weight: 600; margin-bottom: 10px; }
+
+    .joint-work-row {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      padding: 10px 0;
+      border-bottom: 1px solid var(--border);
+    }
+
+    .joint-work-row:last-child { border-bottom: none; }
+
+    .joint-work-info { flex: 1; min-width: 0; }
+    .joint-work-title { font-size: 13px; }
+    .joint-work-meta { font-size: 11px; color: var(--text-dim); margin-top: 2px; }
+
+    .joint-work-status {
+      font-size: 11px;
+      flex-shrink: 0;
+      min-width: 90px;
+      text-align: right;
+      color: var(--text-dim);
+    }
+
+    .joint-work-status.ok { color: var(--ok); }
+    .joint-work-status.err { color: var(--err); }
+
     #legend {
       display: flex;
       gap: 16px;
@@ -315,7 +399,8 @@
     <h2 id="graph-title">Network</h2>
     <div class="hint">
       Click a dashed node to pull in their collaborators (up to 15, by shared works). A solid green ring means
-      already expanded. Click the small ↗ next to a name to open their Download-All-Works page.
+      already expanded. Click the small ↗ next to a name to open their Download-All-Works page. Node size reflects
+      overall citation prominence on OpenAlex, not how much of the map you've explored — hover a node for details.
     </div>
     <div class="actions" style="margin-top: -6px; margin-bottom: 12px;">
       <div id="add-seed-row">
@@ -333,11 +418,51 @@
       <button class="btn-secondary" id="btn-zoom-reset">Reset Zoom</button>
       <span class="hint" style="margin: 0;">Scroll to pan · Ctrl/⌘ + scroll or pinch to zoom</span>
     </div>
+    <div class="nav-toolbar" id="nav-toolbar">
+      <div class="nav-row">
+        <span class="nav-label">Search</span>
+        <input type="text" id="search-input" placeholder="Jump to a person…">
+        <button class="btn-secondary" id="btn-search">Find</button>
+        <span id="search-status"></span>
+      </div>
+      <div id="search-results"></div>
+      <div class="nav-row">
+        <span class="nav-label">Path</span>
+        <select id="path-from"></select>
+        <span style="color: var(--text-dim);">→</span>
+        <select id="path-to"></select>
+        <button class="btn-secondary" id="btn-find-path">Highlight Path</button>
+        <button class="btn-secondary" id="btn-clear-path">Clear Path</button>
+        <span id="path-readout"></span>
+      </div>
+      <div class="nav-row">
+        <span class="nav-label">Focus</span>
+        <select id="focus-target"></select>
+        <span style="color: var(--text-dim);">within</span>
+        <input type="number" id="focus-hops" value="1" min="0" max="6">
+        <span style="color: var(--text-dim);">hop(s)</span>
+        <button class="btn-secondary" id="btn-enable-focus">Enable Focus</button>
+        <button class="btn-secondary" id="btn-clear-focus">Clear Focus</button>
+        <span id="focus-readout"></span>
+      </div>
+    </div>
     <div id="graph-wrap"><div id="empty-graph">Nothing to show yet.</div></div>
     <div id="legend">
       <span><span class="dot seed-dot"></span> Seed author</span>
       <span><span class="dot expanded-dot"></span> Expanded (collaborators loaded)</span>
       <span><span class="dot collapsed-dot"></span> Click to expand</span>
+      <span>Click an edge to see the shared papers behind it</span>
+    </div>
+
+    <div id="joint-works-panel" style="display: none;">
+      <h3 id="joint-works-title">Joint Works</h3>
+      <div class="hint" id="joint-works-hint"></div>
+      <div class="actions" style="margin-top: 0;">
+        <button class="btn-secondary" id="btn-download-all-joint">Download All</button>
+        <button class="btn-secondary" id="btn-close-joint-works">Close</button>
+        <span id="joint-works-status"></span>
+      </div>
+      <div id="joint-works-list" style="margin-top: 10px;"></div>
     </div>
   </div>
 

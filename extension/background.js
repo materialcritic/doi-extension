@@ -1047,6 +1047,88 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     return true;
   }
 
+  if (request.action === "getAuthorMetrics") {
+    // Feeds network.html's node sizing — works_count/cited_by_count are
+    // absolute, OpenAlex-wide figures for the person, not anything derived
+    // from the currently-built graph, so a node's size stays meaningful and
+    // stable regardless of how much of the graph has been expanded so far.
+    // OpenAlex's `search` param is a fuzzy relevance search across authors,
+    // same name-ambiguity caveat as the Crossref author matching used
+    // everywhere else in this extension — the first result is trusted as
+    // the best match rather than verified against any other signal.
+    const url = "https://api.openalex.org/authors?search=" + encodeURIComponent(request.author || "") +
+      "&per-page=1&select=id,display_name,works_count,cited_by_count";
+
+    fetch(url)
+      .then((r) => {
+        if (!r.ok) throw new Error("OpenAlex lookup failed (" + r.status + ")");
+        return r.json();
+      })
+      .then((data) => {
+        const result = (data.results && data.results[0]) || null;
+        if (!result) {
+          sendResponse({ success: true, found: false });
+          return;
+        }
+        sendResponse({
+          success: true,
+          found: true,
+          worksCount: result.works_count || 0,
+          citedByCount: result.cited_by_count || 0,
+          matchedName: result.display_name || request.author,
+        });
+      })
+      .catch((err) => {
+        sendResponse({ success: false, error: err.message });
+      });
+    return true;
+  }
+
+  if (request.action === "getJointWorks") {
+    // Feeds network.html's edge-click panel — an edge only ever stored a
+    // shared-work *count*, never which papers those actually were. Queries
+    // Crossref for authorA's works (same pattern/cap as getCollaborators)
+    // and filters down to the ones where authorB is also a listed author,
+    // rather than a second, separate query — cheaper, and avoids the two
+    // queries disagreeing about which works overlap.
+    const a = parseAuthorName(request.authorA);
+    const b = parseAuthorName(request.authorB);
+
+    const url = "https://api.crossref.org/works?query.author=" +
+      encodeURIComponent(request.authorA || "") +
+      "&rows=1000&select=DOI,title,author,published-print,published-online";
+
+    fetch(url)
+      .then((r) => {
+        if (!r.ok) throw new Error("Crossref lookup failed (" + r.status + ")");
+        return r.json();
+      })
+      .then((data) => {
+        const items = (data.message && data.message.items) || [];
+        const joint = items.filter((item) => {
+          const authors = item.author || [];
+          return matchesAuthor(authors, a.family, a.given) && matchesAuthor(authors, b.family, b.given);
+        });
+
+        const works = joint.map((item) => {
+          const dateParts = (item["published-print"] || item["published-online"] || {})["date-parts"];
+          const year = dateParts && dateParts[0] && dateParts[0][0];
+          return {
+            doi: item.DOI || null,
+            title: decodeHtmlEntities((item.title && item.title[0]) || "(untitled)"),
+            year: year || null,
+          };
+        });
+        works.sort((x, y) => (y.year || 0) - (x.year || 0));
+
+        sendResponse({ success: true, works });
+      })
+      .catch((err) => {
+        sendResponse({ success: false, error: err.message });
+      });
+    return true;
+  }
+
   if (request.action === "resolveLink") {
     getSettings().then((settings) => {
       const port = chrome.runtime.connectNative(NATIVE_HOST);
