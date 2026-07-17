@@ -125,5 +125,61 @@ var ZipWriter = (function () {
     return result;
   }
 
-  return { build: build };
+  function readUint16(view, offset) {
+    return view.getUint16(offset, true);
+  }
+
+  function readUint32(view, offset) {
+    return view.getUint32(offset, true);
+  }
+
+  // Reads back a zip built by build() above (STORE method only — any entry
+  // using real compression will come out as garbled text, but every zip
+  // this extension ever writes is STORE-only, so that's not a real-world
+  // case). Walks the central directory rather than assuming a fixed layout,
+  // so it isn't thrown off by trailing zip-comment bytes. Returns
+  // [{ name, content }].
+  function read(bytes) {
+    var view = new DataView(bytes.buffer || bytes, bytes.byteOffset || 0, bytes.byteLength);
+    var decoder = new TextDecoder();
+
+    // Find the end-of-central-directory record by scanning backward for its
+    // signature (comment length is 0 in our own output, but scanning is
+    // cheap and more robust than assuming that).
+    var eocdOffset = -1;
+    for (var i = bytes.length - 22; i >= 0; i--) {
+      if (readUint32(view, i) === 0x06054b50) {
+        eocdOffset = i;
+        break;
+      }
+    }
+    if (eocdOffset === -1) throw new Error("Not a valid zip file (no end-of-central-directory record found)");
+
+    var entryCount = readUint16(view, eocdOffset + 10);
+    var centralOffset = readUint32(view, eocdOffset + 16);
+
+    var files = [];
+    var pos = centralOffset;
+    for (var n = 0; n < entryCount; n++) {
+      if (readUint32(view, pos) !== 0x02014b50) throw new Error("Malformed central directory entry");
+      var compressedSize = readUint32(view, pos + 20);
+      var nameLen = readUint16(view, pos + 28);
+      var extraLen = readUint16(view, pos + 30);
+      var commentLen = readUint16(view, pos + 32);
+      var localHeaderOffset = readUint32(view, pos + 42);
+      var name = decoder.decode(bytes.subarray(pos + 46, pos + 46 + nameLen));
+
+      var localNameLen = readUint16(view, localHeaderOffset + 26);
+      var localExtraLen = readUint16(view, localHeaderOffset + 28);
+      var dataStart = localHeaderOffset + 30 + localNameLen + localExtraLen;
+      var content = decoder.decode(bytes.subarray(dataStart, dataStart + compressedSize));
+
+      files.push({ name: name, content: content });
+      pos += 46 + nameLen + extraLen + commentLen;
+    }
+
+    return files;
+  }
+
+  return { build: build, read: read };
 })();

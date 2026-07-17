@@ -22,6 +22,7 @@ const yearHistogramEl = document.getElementById("year-histogram");
 const externalLinksEl = document.querySelector(".external-links");
 const btnScholar = document.getElementById("btn-scholar");
 const btnInstitution = document.getElementById("btn-institution");
+const btnCollaboratorsPage = document.getElementById("btn-collaborators-page");
 const abstractTooltipEl = document.getElementById("abstract-tooltip");
 
 // Positions near the cursor but nudged to stay on-screen, since the tooltip's
@@ -712,6 +713,11 @@ btnScholar.addEventListener("click", () => {
 btnInstitution.addEventListener("click", () => {
   const query = affiliation ? `${authorName} ${affiliation} faculty page` : `${authorName} university faculty page`;
   const url = "https://www.google.com/search?q=" + encodeURIComponent(query);
+  chrome.tabs.create({ url });
+});
+
+btnCollaboratorsPage.addEventListener("click", () => {
+  const url = chrome.runtime.getURL("collaborators.html") + "?author=" + encodeURIComponent(authorName);
   chrome.tabs.create({ url });
 });
 

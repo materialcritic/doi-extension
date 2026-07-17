@@ -606,6 +606,163 @@ document.getElementById("btn-report-bug").addEventListener("click", () => {
   chrome.tabs.create({ url: chrome.runtime.getURL("report.html") });
 });
 
+const btnImportBackup = document.getElementById("btn-import-backup");
+const importBackupFile = document.getElementById("import-backup-file");
+const importStatusEl = document.getElementById("import-status");
+
+btnImportBackup.addEventListener("click", () => importBackupFile.click());
+
+importBackupFile.addEventListener("change", async () => {
+  const file = importBackupFile.files[0];
+  importBackupFile.value = ""; // so picking the same file twice in a row still fires "change"
+  if (!file) return;
+
+  if (!confirm("This will overwrite your current settings, watchlists, download history, and mirror health with the contents of this backup. Continue?")) {
+    return;
+  }
+
+  btnImportBackup.disabled = true;
+  importStatusEl.className = "";
+  importStatusEl.textContent = "Restoring…";
+
+  try {
+    const bytes = new Uint8Array(await file.arrayBuffer());
+    const files = ZipWriter.read(bytes);
+    const byName = {};
+    files.forEach((f) => { byName[f.name] = f.content; });
+
+    if (byName["settings.json"]) {
+      const settings = JSON.parse(byName["settings.json"]);
+      await new Promise((resolve) => chrome.storage.sync.set(settings, resolve));
+    }
+    if (byName["local_storage.json"]) {
+      const localData = JSON.parse(byName["local_storage.json"]);
+      await new Promise((resolve) => chrome.storage.local.set(localData, resolve));
+    }
+
+    const importResp = await new Promise((resolve) =>
+      chrome.runtime.sendMessage({
+        action: "importBackupData",
+        downloadLog: byName["download_log.txt"] != null ? byName["download_log.txt"] : null,
+        mirrorHealth: byName["mirror_health.json"] != null ? byName["mirror_health.json"] : null,
+      }, resolve)
+    );
+    if (!importResp || !importResp.success) {
+      throw new Error((importResp && importResp.error) || "Couldn't reach the native host to restore logs/mirror health");
+    }
+
+    importStatusEl.className = "ok";
+    importStatusEl.textContent = "Restored ✓ — reloading…";
+    setTimeout(() => location.reload(), 1200);
+  } catch (err) {
+    importStatusEl.className = "error";
+    importStatusEl.textContent = "Import failed: " + err.message;
+    btnImportBackup.disabled = false;
+  }
+});
+
+// BibTeX/RIS export — download_log.txt only has DOIs, so the actual
+// title/author/journal/year comes from a fresh Crossref lookup per paper
+// (background.js's getBibliographyExport), reported here via the same
+// "progress" messages sendDOI/resolveLink already use.
+const btnExportBibtex = document.getElementById("btn-export-bibtex");
+const btnExportRis = document.getElementById("btn-export-ris");
+const citationExportStatusEl = document.getElementById("citation-export-status");
+
+function bibtexEscape(str) {
+  return String(str || "").replace(/[{}]/g, "");
+}
+
+function buildBibtex(entries) {
+  return entries.map((e) => {
+    const key = (e.authors[0] ? e.authors[0].split(" ").pop() : "anon") + (e.year || "") + e.doi.replace(/[^a-zA-Z0-9]/g, "").slice(-4);
+    const type = e.type === "book" ? "book" : e.type === "proceedings-article" ? "inproceedings" : "article";
+    const fields = [
+      `  title = {${bibtexEscape(e.title)}}`,
+      e.authors.length ? `  author = {${bibtexEscape(e.authors.join(" and "))}}` : null,
+      e.journal ? `  journal = {${bibtexEscape(e.journal)}}` : null,
+      e.year ? `  year = {${e.year}}` : null,
+      e.volume ? `  volume = {${bibtexEscape(e.volume)}}` : null,
+      e.issue ? `  number = {${bibtexEscape(e.issue)}}` : null,
+      e.page ? `  pages = {${bibtexEscape(e.page)}}` : null,
+      `  doi = {${e.doi}}`,
+    ].filter(Boolean);
+    return `@${type}{${key},\n${fields.join(",\n")}\n}`;
+  }).join("\n\n");
+}
+
+function buildRis(entries) {
+  return entries.map((e) => {
+    const type = e.type === "book" ? "BOOK" : e.type === "proceedings-article" ? "CPAPER" : "JOUR";
+    const lines = [`TY  - ${type}`];
+    lines.push(`TI  - ${e.title}`);
+    e.authors.forEach((a) => lines.push(`AU  - ${a}`));
+    if (e.journal) lines.push(`JO  - ${e.journal}`);
+    if (e.year) lines.push(`PY  - ${e.year}`);
+    if (e.volume) lines.push(`VL  - ${e.volume}`);
+    if (e.issue) lines.push(`IS  - ${e.issue}`);
+    if (e.page) lines.push(`SP  - ${e.page}`);
+    lines.push(`DO  - ${e.doi}`);
+    lines.push(`UR  - https://doi.org/${e.doi}`);
+    lines.push("ER  - ");
+    return lines.join("\n");
+  }).join("\n\n");
+}
+
+function downloadTextFile(filename, content) {
+  const blob = new Blob([content], { type: "text/plain" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  URL.revokeObjectURL(url);
+}
+
+function runCitationExport(format) {
+  btnExportBibtex.disabled = true;
+  btnExportRis.disabled = true;
+  citationExportStatusEl.className = "";
+  citationExportStatusEl.textContent = "Fetching metadata…";
+
+  const onProgress = (message) => {
+    if (message.action === "progress") citationExportStatusEl.textContent = message.line;
+  };
+  chrome.runtime.onMessage.addListener(onProgress);
+
+  chrome.runtime.sendMessage({ action: "getBibliographyExport" }, (resp) => {
+    chrome.runtime.onMessage.removeListener(onProgress);
+    btnExportBibtex.disabled = false;
+    btnExportRis.disabled = false;
+
+    if (!resp || !resp.success) {
+      citationExportStatusEl.className = "error";
+      citationExportStatusEl.textContent = "Export failed: " + ((resp && resp.error) || "unknown error");
+      return;
+    }
+    if (resp.entries.length === 0) {
+      citationExportStatusEl.className = "";
+      citationExportStatusEl.textContent = "No downloaded papers yet.";
+      return;
+    }
+
+    const today = new Date().toISOString().slice(0, 10);
+    if (format === "bibtex") {
+      downloadTextFile(`doi-grabber-library-${today}.bib`, buildBibtex(resp.entries));
+    } else {
+      downloadTextFile(`doi-grabber-library-${today}.ris`, buildRis(resp.entries));
+    }
+
+    citationExportStatusEl.className = "ok";
+    citationExportStatusEl.textContent = `Exported ${resp.entries.length} paper${resp.entries.length === 1 ? "" : "s"} ✓`;
+  });
+}
+
+btnExportBibtex.addEventListener("click", () => runCitationExport("bibtex"));
+btnExportRis.addEventListener("click", () => runCitationExport("ris"));
+
 // Updates card — "Check for Updates" runs a fresh git-fetch-based check
 // (doesn't just trust the 12-hour background cache, since the user clicked
 // specifically to get a current answer); "Update Now" runs a fast-forward

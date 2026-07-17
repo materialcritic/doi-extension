@@ -1386,6 +1386,90 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     return true;
   }
 
+  if (request.action === "getBibliographyExport") {
+    // Feeds Settings' BibTeX/RIS export — download_log.txt only ever
+    // recorded the DOI (not title/author/journal/year), so this walks the
+    // full list of every successfully-downloaded DOI, then backfills real
+    // metadata from Crossref per DOI. Same throttle (3 at a time, one retry
+    // on failure) as the References-panel title backfill, since firing
+    // hundreds of Crossref lookups at once would just start 429ing.
+    const port = chrome.runtime.connectNative(NATIVE_HOST);
+
+    const nativeResult = new Promise((resolve, reject) => {
+      port.onMessage.addListener((message) => {
+        if (message.type === "progress") return;
+        resolve(message);
+        port.disconnect();
+      });
+      port.onDisconnect.addListener(() => {
+        const err = chrome.runtime.lastError;
+        if (err) reject(new Error(err.message));
+      });
+    });
+
+    port.postMessage({ action: "recent_downloads", limit: 100000 });
+
+    nativeResult
+      .then((message) => {
+        if (message.status !== "ok") throw new Error(message.detail || "Couldn't read the download log");
+        const downloads = message.downloads || [];
+        if (downloads.length === 0) return [];
+
+        const entries = downloads.map((d) => ({ doi: d.doi, year: null, title: null, authors: [], journal: null, type: null }));
+        const CONCURRENCY = 3;
+        let cursor = 0;
+        let done = 0;
+
+        const fetchOne = (entry, isRetry) =>
+          fetch("https://api.crossref.org/works/" + encodeURIComponent(entry.doi))
+            .then((r) => {
+              if (!r.ok) throw new Error("status " + r.status);
+              return r.json();
+            })
+            .then((data) => {
+              const msg = data && data.message;
+              entry.title = decodeHtmlEntities((msg && msg.title && msg.title[0]) || "") || entry.doi;
+              entry.authors = ((msg && msg.author) || []).map((a) =>
+                decodeHtmlEntities([a.given, a.family].filter(Boolean).join(" "))
+              );
+              entry.journal = decodeHtmlEntities((msg && msg["container-title"] && msg["container-title"][0]) || "");
+              entry.volume = (msg && msg.volume) || "";
+              entry.issue = (msg && msg.issue) || "";
+              entry.page = (msg && msg.page) || "";
+              entry.type = (msg && msg.type) || "";
+              const dateParts = (msg && (msg["published-print"] || msg["published-online"]) || {})["date-parts"];
+              entry.year = (dateParts && dateParts[0] && dateParts[0][0]) || null;
+            })
+            .catch((err) => {
+              if (!isRetry) return fetchOne(entry, true);
+              entry.title = entry.doi;
+              entry.authors = [];
+            })
+            .finally(() => {
+              done += 1;
+              chrome.runtime.sendMessage({ action: "progress", line: `Fetching metadata… ${done}/${entries.length}` }, () => void chrome.runtime.lastError);
+            });
+
+        const worker = () => {
+          if (cursor >= entries.length) return Promise.resolve();
+          const entry = entries[cursor];
+          cursor += 1;
+          return fetchOne(entry, false).then(worker);
+        };
+
+        const workers = new Array(Math.min(CONCURRENCY, entries.length)).fill(0).map(worker);
+        return Promise.all(workers).then(() => entries);
+      })
+      .then((entries) => {
+        sendResponse({ success: true, entries });
+      })
+      .catch((err) => {
+        sendResponse({ success: false, error: err.message });
+      });
+
+    return true;
+  }
+
   if (request.action === "getDefaultOutputDir") {
     const port = chrome.runtime.connectNative(NATIVE_HOST);
 
@@ -1507,6 +1591,28 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     });
 
     port.postMessage({ action: "export_data" });
+    return true;
+  }
+
+  if (request.action === "importBackupData") {
+    const port = chrome.runtime.connectNative(NATIVE_HOST);
+
+    port.onMessage.addListener((message) => {
+      if (message.type === "progress") return;
+      sendResponse({ success: message.status === "ok", error: message.detail });
+      port.disconnect();
+    });
+
+    port.onDisconnect.addListener(() => {
+      const err = chrome.runtime.lastError;
+      if (err) sendResponse({ success: false, error: err.message });
+    });
+
+    port.postMessage({
+      action: "import_data",
+      download_log: request.downloadLog != null ? request.downloadLog : null,
+      mirror_health: request.mirrorHealth != null ? request.mirrorHealth : null,
+    });
     return true;
   }
 

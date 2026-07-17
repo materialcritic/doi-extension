@@ -630,7 +630,7 @@
         <label>Export Everything</label>
         <div class="hint">
           Downloads a single zip with your settings, watchlists, download history, and mirror health — useful for
-          backing up or moving to another machine. Export only for now; there's no import/restore yet.
+          backing up or moving to another machine.
         </div>
       </div>
 
@@ -640,12 +640,45 @@
       </div>
 
       <div class="field" style="margin-top: 26px;">
+        <label>Import Backup</label>
+        <div class="hint">
+          Restores settings, watchlists, download history, and mirror health from a zip created by Export Everything.
+          This overwrites your current settings and history — there's no undo.
+        </div>
+      </div>
+
+      <div class="actions">
+        <input type="file" id="import-backup-file" accept=".zip" style="display: none;">
+        <button id="btn-import-backup" class="secondary">Import Backup…</button>
+        <span id="import-status"></span>
+      </div>
+
+      <div class="field" style="margin-top: 26px;">
         <label>Report a Bug/Feature Request</label>
         <div class="hint">Opens a form in a new tab to describe the issue, attach screenshots, and include code.</div>
       </div>
 
       <div class="actions">
         <button id="btn-report-bug" class="secondary">Report a Bug/Feature Request</button>
+      </div>
+    </section>
+
+    <section class="card">
+      <h2>Citation Export</h2>
+
+      <div class="field">
+        <label>Export Downloaded Papers</label>
+        <div class="hint">
+          Builds a citation file covering every paper you've successfully downloaded, with metadata fetched fresh
+          from Crossref — for importing into Zotero, Mendeley, or another reference manager. Can take a while for a
+          large library, since it's one lookup per paper.
+        </div>
+      </div>
+
+      <div class="actions">
+        <button id="btn-export-bibtex" class="secondary">Export as BibTeX</button>
+        <button id="btn-export-ris" class="secondary">Export as RIS</button>
+        <span id="citation-export-status"></span>
       </div>
     </section>
   </div>

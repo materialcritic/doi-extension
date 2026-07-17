@@ -272,6 +272,34 @@ def main():
         })
         return
 
+    if message.get("action") == "import_data":
+        # Restores the two files this host owns the paths for, from a
+        # previously-exported backup zip (Settings' "Import Backup"). Fully
+        # overwrites rather than merges — a restore is expected to replace
+        # current state, not interleave with it. Writes via a temp file +
+        # os.replace (atomic on POSIX and Windows) so a concurrent reader
+        # (e.g. a download in progress) never sees a half-written file,
+        # same pattern scihub_download.py uses for mirror_health.json.
+        download_log = message.get("download_log")
+        mirror_health = message.get("mirror_health")
+        try:
+            if download_log is not None:
+                tmp_path = DOWNLOAD_LOG_PATH + ".tmp"
+                with open(tmp_path, "w") as f:
+                    f.write(download_log)
+                os.replace(tmp_path, DOWNLOAD_LOG_PATH)
+
+            if mirror_health is not None:
+                tmp_path = MIRROR_HEALTH_PATH + ".tmp"
+                with open(tmp_path, "w") as f:
+                    f.write(mirror_health)
+                os.replace(tmp_path, MIRROR_HEALTH_PATH)
+
+            send_message({"type": "result", "status": "ok"})
+        except Exception as e:
+            send_message({"type": "result", "status": "error", "detail": str(e)})
+        return
+
     if message.get("action") == "check_for_update":
         # Settings' "Updates" card — reports how far the local checkout is
         # behind origin, plus the commit subjects that would land, without
