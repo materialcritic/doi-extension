@@ -43,6 +43,11 @@ function openSimilarSearch(work) {
   chrome.tabs.create({ url: chrome.runtime.getURL("search.html") + "?" + searchParams.toString() });
 }
 
+function openAuthorPage(authorName) {
+  const url = chrome.runtime.getURL("author.html") + "?author=" + encodeURIComponent(authorName);
+  chrome.tabs.create({ url });
+}
+
 const params = new URLSearchParams(window.location.search);
 const query = params.get("q") || "";
 const sourceTitle = params.get("sourceTitle") || "";
@@ -164,8 +169,22 @@ function renderWorks() {
     const meta = document.createElement("div");
     meta.className = "work-meta";
     const citationText = work.citations != null ? `${work.citations} citation${work.citations === 1 ? "" : "s"}` : "";
-    const metaParts = [work.journal, work.author, work.year, citationText, work.doi || "no DOI found"].filter(Boolean);
-    meta.textContent = metaParts.join(" · ");
+    const metaParts = [];
+    if (work.journal) metaParts.push(work.journal);
+    if (work.author) {
+      const authorLink = document.createElement("span");
+      authorLink.className = "author-link";
+      authorLink.textContent = work.author;
+      authorLink.addEventListener("click", () => openAuthorPage(work.author));
+      metaParts.push(authorLink);
+    }
+    if (work.year) metaParts.push(work.year);
+    if (citationText) metaParts.push(citationText);
+    metaParts.push(work.doi || "no DOI found");
+    metaParts.forEach((part, idx) => {
+      if (idx > 0) meta.appendChild(document.createTextNode(" · "));
+      meta.appendChild(typeof part === "string" ? document.createTextNode(part) : part);
+    });
     meta.appendChild(document.createTextNode(" · "));
     const similarLink = document.createElement("span");
     similarLink.className = "find-similar";

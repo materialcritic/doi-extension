@@ -69,6 +69,11 @@ function openSimilarSearch(work) {
   chrome.tabs.create({ url: chrome.runtime.getURL("search.html") + "?" + searchParams.toString() });
 }
 
+function openAuthorPage(authorName) {
+  const url = chrome.runtime.getURL("author.html") + "?author=" + encodeURIComponent(authorName);
+  chrome.tabs.create({ url });
+}
+
 const params = new URLSearchParams(window.location.search);
 const issn = params.get("issn") || "";
 const volume = params.get("volume") || "";
@@ -221,8 +226,25 @@ function renderWorks() {
     const meta = document.createElement("div");
     meta.className = "work-meta";
     const citationText = work.citations != null ? `${work.citations} citation${work.citations === 1 ? "" : "s"}` : "";
-    const metaParts = [work.author, work.page ? `p. ${work.page}` : "", citationText, work.doi || "no DOI found"].filter(Boolean);
-    meta.textContent = metaParts.join(" · ");
+    const metaParts = [];
+    if (work.author) {
+      const authorLink = document.createElement("span");
+      authorLink.className = "author-link";
+      authorLink.textContent = work.author;
+      authorLink.addEventListener("click", () => openAuthorPage(work.author));
+      metaParts.push(authorLink);
+    }
+    if (work.page) metaParts.push(`p. ${work.page}`);
+    if (citationText) metaParts.push(citationText);
+    metaParts.push(work.doi || "no DOI found");
+    metaParts.forEach((part, idx) => {
+      if (idx > 0) meta.appendChild(document.createTextNode(" · "));
+      if (typeof part === "string") {
+        meta.appendChild(document.createTextNode(part));
+      } else {
+        meta.appendChild(part);
+      }
+    });
     meta.appendChild(document.createTextNode(" · "));
     const similarLink = document.createElement("span");
     similarLink.className = "find-similar";
@@ -785,7 +807,21 @@ function renderJournalSearchResults(matches, query) {
     meta.className = "work-meta";
     const volumeText = work.volume ? `Vol. ${work.volume}${work.issue ? ", Issue " + work.issue : ""}` : "";
     const citationText = work.citations != null ? `${work.citations} citation${work.citations === 1 ? "" : "s"}` : "";
-    meta.textContent = [work.author, volumeText, citationText, work.doi || "no DOI found"].filter(Boolean).join(" · ");
+    const metaParts = [];
+    if (work.author) {
+      const authorLink = document.createElement("span");
+      authorLink.className = "author-link";
+      authorLink.textContent = work.author;
+      authorLink.addEventListener("click", () => openAuthorPage(work.author));
+      metaParts.push(authorLink);
+    }
+    if (volumeText) metaParts.push(volumeText);
+    if (citationText) metaParts.push(citationText);
+    metaParts.push(work.doi || "no DOI found");
+    metaParts.forEach((part, idx) => {
+      if (idx > 0) meta.appendChild(document.createTextNode(" · "));
+      meta.appendChild(typeof part === "string" ? document.createTextNode(part) : part);
+    });
 
     info.appendChild(title);
     info.appendChild(meta);
