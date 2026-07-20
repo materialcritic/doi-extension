@@ -76,98 +76,169 @@ The extension talks to the free **Crossref**, **OpenAlex**, and **Semantic Schol
 
 ## Prerequisites
 
-- **macOS, Windows, or Linux**, with **Google Chrome** (or another Chromium-based browser that supports MV3 + Native Messaging, e.g. Brave/Edge — untested here, but should work)
-- **Python 3** with the [`requests`](https://pypi.org/project/requests/) and [`beautifulsoup4`](https://pypi.org/project/beautifulsoup4/) packages installed:
-  ```bash
-  pip3 install requests beautifulsoup4      # macOS/Linux
-  py -m pip install requests beautifulsoup4 # Windows
-  ```
-- **`git`**, installed and on your PATH — used both to clone this repo initially and by the extension's own [self-update feature](#keeping-it-up-to-date), which shells out to `git fetch`/`git pull` in your local checkout.
-- Familiarity with `chrome://extensions` Developer Mode, and running shell scripts from Terminal (macOS) or PowerShell (Windows)
-
-`native-host/doi_host.py` and `native-host/scihub_download.py` auto-detect sensible defaults (their own folder for log/health files, `python3`/`python`/the `py` launcher for the interpreter, `~/Downloads/autorename` for the output folder) so they work out of the box on both platforms — nothing needs source-editing before first install, only the Settings-page fields below.
-
-## Installation
-
-### 1. Clone the repo and load the Chrome extension
-
-Pick one folder for the whole repo up front — both the extension and the native host need to live under the **same git checkout** (the [self-update feature](#keeping-it-up-to-date) runs `git pull` in whatever folder `native-host/doi_host.py` sits in, and that only makes sense if it's this repo).
-
-> **On macOS, clone somewhere other than `~/Downloads` (or `~/Desktop`/`~/Documents`).** Those are TCC-protected folders — even with the extension and native host wired up correctly, macOS can silently block Chrome from *executing* `doi_host.py` out of one of them, with no prompt and no useful error beyond a generic "native host has exited." A plain home-directory location like `~/doi-extension` avoids the whole problem. (This is separate from the Gatekeeper quarantine-flag issue below — that one's about *where the file came from*, this one's about *which folder it lives in*.)
-
-```bash
-cd ~
-git clone https://github.com/materialcritic/doi-extension.git
-cd doi-extension
-```
-
-1. Open Chrome and go to `chrome://extensions`.
-2. Toggle **Developer mode** on (top-right).
-3. Click **Load unpacked** and select this repo's `extension/` folder.
-4. Note the **Extension ID** shown on the card that appears — you'll need it in the next step.
-
-### 2. Install the Native Messaging host
+No prior experience with Terminal, git, or Python required — every command below is given to you exactly, so you can just copy, paste, and press Enter. Pick your platform and work through it top to bottom before moving on to [Installation](#installation).
 
 <details open>
-<summary><strong>macOS / Linux</strong></summary>
+<summary><strong>macOS</strong></summary>
 
-> **If Chrome reports "native host has exited," there are two independent macOS causes to rule out** (see [Troubleshooting](#troubleshooting) for full recovery steps):
-> 1. **Wrong folder (see the callout above)** — `doi_host.py` living under `~/Downloads`/`~/Desktop`/`~/Documents` can be silently blocked by macOS's TCC folder protection, with no error beyond this generic message. Move the whole repo to somewhere like `~/doi-extension` and re-run `./install.sh`.
-> 2. **Quarantine flag** — macOS Gatekeeper attaches `com.apple.quarantine` to files downloaded through a browser or saved by an app like TextEdit/Finder from a browser-downloaded source. A `git clone` run from Terminal does **not** set this flag, so it's rarer, but check with `xattr -l native-host/doi_host.py` and clear it with `xattr -d com.apple.quarantine native-host/doi_host.py` if present.
-
-```bash
-cd doi-extension/native-host   # wherever you cloned the repo, from step 1
-./install.sh
-```
-
-The installer will:
-- `chmod +x doi_host.py`
-- Ask for the **Extension ID** from step 1
-- Write `com.doi_grabber.host.json` (the Native Messaging manifest Chrome reads) to `~/Library/Application Support/Google/Chrome/NativeMessagingHosts/` (macOS) or `~/.config/google-chrome/NativeMessagingHosts/` (Linux), pointing at your `doi_host.py`
+1. **Google Chrome** — [download here](https://www.google.com/chrome/) if you don't already have it.
+2. **Terminal** — already on every Mac, nothing to install. Open it by pressing `⌘ Space`, typing `Terminal`, and pressing Enter. This is where you'll paste commands throughout setup — it's just a text-based way to tell your computer what to do.
+3. **git** — check whether you already have it. In Terminal, paste this and press Enter:
+   ```bash
+   git --version
+   ```
+   - If you see something like `git version 2.39.2`, you're done with this step.
+   - If a popup instead appears asking to install "Command Line Developer Tools," click **Install**, wait a few minutes for it to finish, then run the command above again to confirm.
+4. **Python 3** — check whether you already have it:
+   ```bash
+   python3 --version
+   ```
+   - If you see `Python 3.x.x`, you're set.
+   - If you get `command not found`, install it from [python.org/downloads](https://www.python.org/downloads/) — download the macOS installer and click through it with the default options — then run the command above again to confirm.
+5. Install the two Python packages this tool needs by pasting into Terminal:
+   ```bash
+   pip3 install requests beautifulsoup4
+   ```
+   You should see a "Successfully installed…" message at the end.
 
 </details>
 
 <details>
 <summary><strong>Windows</strong></summary>
 
-```powershell
-cd doi-extension\native-host
-.\install.ps1
-```
+1. **Google Chrome** — [download here](https://www.google.com/chrome/) if you don't already have it.
+2. **PowerShell** — already on every Windows machine, nothing to install. Open it by clicking the **Start** menu, typing `PowerShell`, and pressing Enter. This is where you'll paste commands throughout setup.
+3. **git** — check whether you already have it. In PowerShell, paste this and press Enter:
+   ```powershell
+   git --version
+   ```
+   - If you see something like `git version 2.43.0.windows.1`, you're done with this step.
+   - If you get an error, download the installer from [git-scm.com/download/win](https://git-scm.com/download/win), run it, and click **Next** through every screen leaving the defaults as they are. Then close and reopen PowerShell and run the command above again to confirm.
+4. **Python 3** — check whether you already have it:
+   ```powershell
+   py --version
+   ```
+   - If you see `Python 3.x.x`, you're set.
+   - If not, download the installer from [python.org/downloads](https://www.python.org/downloads/windows/) and run it. **On the very first screen, tick the checkbox at the bottom that says "Add python.exe to PATH" before clicking "Install Now"** — this is the single most common thing people miss, and skipping it means Windows won't be able to find Python later. Once it finishes, close and reopen PowerShell and run the command above again to confirm.
+5. Install the two Python packages this tool needs by pasting into PowerShell:
+   ```powershell
+   py -m pip install requests beautifulsoup4
+   ```
+   You should see a "Successfully installed…" message at the end.
 
-If PowerShell blocks the script from running, allow it for this session first: `Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass`.
+</details>
 
-The installer will:
-- Ask for the **Extension ID** from step 1
-- Write `com.doi_grabber.host.json` next to itself in `native-host\`, with `"path"` pointing at `doi_host.bat` (a small wrapper — Chrome needs an executable it can spawn directly, and can't run a bare `.py` file the way macOS/Linux can via a shebang line)
-- Register that manifest's path in the registry at `HKCU:\Software\Google\Chrome\NativeMessagingHosts\com.doi_grabber.host` (Windows has no fixed native-messaging-hosts folder like macOS/Linux — it uses the registry instead)
+That's everything you need before starting — the extension and native host auto-detect the rest (log file locations, which Python to use, a default download folder), so nothing else needs configuring up front.
 
-`doi_host.bat` looks for the `py` launcher (bundled with the standard python.org Windows installer) first, falling back to `python` on PATH.
+## Installation
 
-> Windows support here is implemented but not verified on a real Windows machine — if something doesn't work, please [file a bug report](#reporting-a-bug-or-requesting-a-feature) with the exact error.
+Four steps: download the code, load it into Chrome, connect Chrome to the Python script, then try a download. Work through them in order — each one builds on the last.
+
+### 1. Clone the repo and load the Chrome extension
+
+"Cloning" just means downloading a copy of this project onto your computer in a way that can pull future updates automatically later (see [Keeping it up to date](#keeping-it-up-to-date)).
+
+> ⚠️ **On macOS, don't put this inside `~/Downloads`, `~/Desktop`, or `~/Documents`.** macOS has a security feature that can silently block Chrome from running the helper script if it lives in one of those three folders — with no error message explaining why, just a confusing "native host has exited." Following the steps below (which clone straight into your Home folder) avoids this entirely, so there's nothing extra you need to do — just don't manually move the folder into Downloads/Desktop/Documents afterward.
+
+<details open>
+<summary><strong>macOS</strong></summary>
+
+1. Open **Terminal** (`⌘ Space`, type `Terminal`, Enter).
+2. Paste each of these three lines in, pressing Enter after each one before typing the next:
+   ```bash
+   cd ~
+   git clone https://github.com/materialcritic/doi-extension.git
+   cd doi-extension
+   ```
+   *(`cd ~` moves you to your Home folder; `git clone` downloads the project into a new `doi-extension` folder there; `cd doi-extension` moves you into it.)*
+3. **Checkpoint:** type `pwd` and press Enter — it should print something ending in `/doi-extension`, e.g. `/Users/yourname/doi-extension`. If it does, you're good to continue.
+
+</details>
+
+<details>
+<summary><strong>Windows</strong></summary>
+
+1. Open **PowerShell** (Start menu → type `PowerShell` → Enter).
+2. Paste each of these three lines in, pressing Enter after each one before typing the next:
+   ```powershell
+   cd ~
+   git clone https://github.com/materialcritic/doi-extension.git
+   cd doi-extension
+   ```
+3. **Checkpoint:** type `pwd` and press Enter — it should print something ending in `\doi-extension`, e.g. `C:\Users\yourname\doi-extension`. If it does, you're good to continue.
+
+</details>
+
+Now load the extension into Chrome (same on both platforms):
+
+4. Open Chrome and go to `chrome://extensions` (paste that into the address bar and press Enter — it's a special internal page, not a website).
+5. In the top-right corner of that page, click the **Developer mode** toggle to turn it on. (A few new buttons will appear on the left — this is expected.)
+6. Click **Load unpacked**.
+7. A file picker opens. Navigate into the `doi-extension` folder you just created, then select the **`extension`** subfolder inside it (select the folder itself, don't open it), and click **Select Folder** (Windows) / **Open** (macOS).
+8. A card titled "DOI Grabber" should now appear on the extensions page. **Write down the Extension ID** shown on that card — a long string of lowercase letters (e.g. `laggaiemaddbjjfckfbmlhkcaanfnlim`) — you'll need to paste it into the next step.
+
+### 2. Install the Native Messaging host
+
+This step is what lets Chrome hand a DOI off to the Python script that actually finds and downloads the PDF. It only needs to be run once.
+
+<details open>
+<summary><strong>macOS / Linux</strong></summary>
+
+1. Back in the same Terminal window (still inside the `doi-extension` folder), run:
+   ```bash
+   cd native-host
+   ./install.sh
+   ```
+2. It will ask you to paste in the **Extension ID** from step 1 — paste it in and press Enter.
+3. You should see a short confirmation message and be back at the prompt — that's it, nothing else to do here.
+
+If a later download fails with "native host has exited," see [Troubleshooting](#troubleshooting) — the most common cause is the repo ending up inside `~/Downloads`/`~/Desktop`/`~/Documents` (the callout above explains why, and how to fix it by moving the folder).
+
+</details>
+
+<details>
+<summary><strong>Windows</strong></summary>
+
+1. Back in the same PowerShell window (still inside the `doi-extension` folder), run:
+   ```powershell
+   cd native-host
+   .\install.ps1
+   ```
+2. **If you see a red error mentioning "execution policy" or "running scripts is disabled"** — this is Windows being cautious about running a script it doesn't recognize yet, not a real problem. Paste in this line (it only relaxes the restriction for this one PowerShell window, just this once), press Enter, then run `.\install.ps1` again:
+   ```powershell
+   Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass
+   ```
+3. It will ask you to paste in the **Extension ID** from step 1 — paste it in and press Enter.
+4. You should see a short confirmation message and be back at the prompt.
+
+> **Note:** Windows support has been built and carefully reasoned through, but hasn't yet been verified step-by-step on a real Windows machine. If anything here doesn't match what you see, please [file a bug report](#reporting-a-bug-or-requesting-a-feature) with the exact error message — that's the fastest way to get it fixed for the next person.
 
 </details>
 
 ### 3. Point the extension at your Python setup
 
-Open the extension's **Settings** page (right-click the toolbar icon → Options, or click the ⚙ in the popup) and fill in the **Connection** card — only needed if the auto-detected defaults don't already work for you:
+For most people, this step can be **skipped entirely** — the extension auto-detects a working Python install. Only come back to this if [step 4](#4-try-it) doesn't work and the troubleshooting section points you here.
+
+If you do need it: open the extension's **Settings** page (right-click the toolbar icon in Chrome → **Options**, or click the ⚙ inside the popup) and fill in the **Connection** card:
 
 | Field | What it is |
 |---|---|
-| **Output folder** | Where downloaded PDFs are saved. Leave blank to use `scihub_download.py`'s default (`~/Downloads/autorename`, or `%USERPROFILE%\Downloads\autorename` on Windows). |
-| **Python interpreter path** | Full path to a `python3`/`python` that has `requests` and `beautifulsoup4` installed (e.g. `/opt/homebrew/bin/python3` for Homebrew on Apple Silicon, or `C:\Users\you\AppData\Local\Programs\Python\Python312\python.exe` on Windows). Chrome may launch the native host with a system interpreter that lacks your packages — this field overrides that per-request. |
-| **Script path** | Full path to `scihub_download.py` (in this repo: `native-host/scihub_download.py`). Also overridable at runtime. |
+| **Output folder** | Where downloaded PDFs are saved. Leave blank to use the default (`~/Downloads/autorename` on macOS/Linux, `%USERPROFILE%\Downloads\autorename` on Windows). |
+| **Python interpreter path** | Full path to a `python3`/`python` that has `requests` and `beautifulsoup4` installed. To find yours: macOS/Linux Terminal, run `which python3`; Windows PowerShell, run `(Get-Command py).Source`. Paste whatever path that prints in here. |
+| **Script path** | Full path to `scihub_download.py` (inside this repo at `native-host/scihub_download.py`). |
 | **Sci-Hub mirrors** | One URL per line. Leave blank to use the script's built-in mirror list. |
-| **Unpaywall contact email** | Sent with every Unpaywall API request, per their usage policy (just how they'd reach you if the API were being misused — not a login). Leave blank to use `scihub_download.py`'s built-in default. |
+| **Unpaywall contact email** | Sent with every Unpaywall API request, per their usage policy (just how they'd reach you if the API were being misused — not a login). Leave blank to use the built-in default. |
 
-The Unpaywall email is the one setting worth actually filling in on first setup rather than leaving blank — it's a real usage-policy requirement, and the built-in default is the maintainer's own address, not a placeholder.
+The Unpaywall email is the one field worth filling in even if nothing's broken — it's a real usage-policy requirement, and the built-in default is the maintainer's own address, not a placeholder.
 
 ### 4. Try it
 
-1. Fully restart Chrome (Native Messaging hosts are only re-spawned on a fresh connection after a full restart, or a disable/re-enable of the extension — a plain "reload" of the extension is **not** enough after changing `doi_host.py` or `scihub_download.py`).
-2. Visit any academic paper's page (try a DOI resolver link like `https://doi.org/10.1234/example`, or any journal article page).
-3. Click the toolbar icon. If a DOI was detected, you'll see it in the box and the **Download** button will enable.
-4. Click **Download** and watch the live log scroll as it races mirrors and saves the file.
+1. **Fully quit and reopen Chrome** — not just close the window, actually quit the application (macOS: `⌘Q` or Chrome menu → Quit Chrome; Windows: close every Chrome window, then check it's not still running in the system tray). This step only needs doing once, right after install — Chrome only picks up the native host on a fresh start, a plain page reload isn't enough.
+2. Visit any academic paper's page — try pasting `https://doi.org/10.1038/nphys1170` into the address bar, or any journal article page you'd normally read.
+3. Click the DOI Grabber toolbar icon (top-right of Chrome, may be tucked under the puzzle-piece icon — click that, then the pin icon next to DOI Grabber to keep it visible). If a DOI was detected on the page, you'll see it in the popup and the **Download** button will be enabled.
+4. Click **Download** and watch the live log scroll as it races mirrors and saves the file. When it finishes, a **Reveal in Finder** (macOS) / **Open File Explorer** (Windows) button appears — click it to see the PDF.
+
+If anything above didn't go as described, jump to [Troubleshooting](#troubleshooting) — it's organized by symptom.
 
 ## Using the popup
 
