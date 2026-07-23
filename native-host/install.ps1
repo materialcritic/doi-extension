@@ -1,5 +1,5 @@
-# ─────────────────────────────────────────────────────────
-# DOI Grabber — Native Messaging Host installer (Windows)
+# -------------------------------------------------------------------
+# DOI Grabber - Native Messaging Host installer (Windows)
 # Run this AFTER loading the extension in Chrome and getting
 # its Extension ID from chrome://extensions
 #
@@ -9,7 +9,7 @@
 #
 # If script execution is blocked, run once first:
 #   Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass
-# ─────────────────────────────────────────────────────────
+# -------------------------------------------------------------------
 
 $ErrorActionPreference = "Stop"
 
@@ -19,7 +19,7 @@ $ManifestName = "com.doi_grabber.host.json"
 $ManifestDest = Join-Path $ScriptDir $ManifestName
 
 if (-not (Test-Path $HostWrapper)) {
-    Write-Error "Couldn't find doi_host.bat next to this script — make sure you're running install.ps1 from inside native-host\."
+    Write-Error "Couldn't find doi_host.bat next to this script - make sure you're running install.ps1 from inside native-host\."
     exit 1
 }
 
@@ -34,7 +34,7 @@ if ([string]::IsNullOrWhiteSpace($ExtId)) {
     exit 1
 }
 
-# Native Messaging manifest — same shape as the macOS/Linux one, but "path"
+# Native Messaging manifest - same shape as the macOS/Linux one, but "path"
 # points at the .bat wrapper (Chrome needs an executable it can spawn
 # directly; it can't run a bare .py file on Windows the way it can via a
 # shebang line on macOS/Linux).
@@ -52,7 +52,7 @@ $ManifestJson = $ManifestObject | ConvertTo-Json
 [System.IO.File]::WriteAllText($ManifestDest, $ManifestJson, (New-Object System.Text.UTF8Encoding($false)))
 
 # Windows registers Native Messaging hosts via the registry instead of a
-# fixed folder (which is how macOS/Linux do it) — the registry value just
+# fixed folder (which is how macOS/Linux do it) - the registry value just
 # points at this manifest file's path.
 $RegPath = "HKCU:\Software\Google\Chrome\NativeMessagingHosts\com.doi_grabber.host"
 New-Item -Path $RegPath -Force | Out-Null
