@@ -138,7 +138,11 @@ Four steps: download the code, load it into Chrome, connect Chrome to the Python
 
 "Cloning" just means downloading a copy of this project onto your computer in a way that can pull future updates automatically later (see [Keeping it up to date](#keeping-it-up-to-date)).
 
+> ⚠️ **Use `git clone` (below), not GitHub's green "Code → Download ZIP" button.** A zip download has no hidden `.git` folder, which silently breaks the extension's [self-update feature](#keeping-it-up-to-date) later — and zip extraction sometimes produces a confusingly doubled folder (e.g. `doi-extension-main\doi-extension-main`) or a file that didn't extract completely, which can look like a broken installer script when the real problem is just how it got onto your machine. The `git clone` commands below are the only supported install path.
+
 > ⚠️ **On macOS, don't put this inside `~/Downloads`, `~/Desktop`, or `~/Documents`.** macOS has a security feature that can silently block Chrome from running the helper script if it lives in one of those three folders — with no error message explaining why, just a confusing "native host has exited." Following the steps below (which clone straight into your Home folder) avoids this entirely, so there's nothing extra you need to do — just don't manually move the folder into Downloads/Desktop/Documents afterward.
+
+> ⚠️ **On Windows, don't put this inside a OneDrive-synced folder.** If your Desktop or Documents shows a little cloud icon on files in File Explorer, OneDrive is syncing it (common on work/school PCs, and some personal ones too, via a feature called "Known Folder Move"). OneDrive can leave a file as a not-fully-downloaded placeholder that other programs read before it's actually finished syncing — which can make a perfectly fine script look corrupted (e.g. a confusing PowerShell "missing closing brace" parse error) even though nothing is actually wrong with it. Cloning straight into your home folder as the steps below do (`cd ~`) avoids this — `C:\Users\yourname\` itself is normally not OneDrive-synced even when Desktop/Documents are.
 
 <details open>
 <summary><strong>macOS</strong></summary>
