@@ -20,6 +20,19 @@ from urllib.parse import quote, urljoin
 import requests
 from bs4 import BeautifulSoup
 
+# On Windows, stdout/stderr are frequently attached to a legacy codepage
+# (cp1252, cp437, ...) rather than UTF-8 — this script prints Unicode symbols
+# (checkmarks, an X, etc.) in status lines, which then raises
+# UnicodeEncodeError('charmap', ...) and crashes the whole run, even though
+# the actual download logic never failed. reconfigure() (Python 3.7+) forces
+# UTF-8 regardless of the console's codepage, with a safety-net fallback
+# (errors="replace") for the rare stream that can't be reconfigured at all.
+for _stream in (sys.stdout, sys.stderr):
+    try:
+        _stream.reconfigure(encoding='utf-8', errors='replace')
+    except (AttributeError, ValueError):
+        pass
+
 MIRROR_HEALTH_PATH = Path(__file__).resolve().parent / 'mirror_health.json'
 # Contact address sent on every Unpaywall request, per their usage policy —
 # not a login, just how they reach someone if the API is being misused.

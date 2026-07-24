@@ -372,7 +372,15 @@ def main():
                 ["git", "status", "--porcelain"],
                 cwd=REPO_DIR, check=True, capture_output=True, text=True,
             ).stdout.strip()
-            if status:
+            # `git status --porcelain` also lists untracked files ("?? ..."),
+            # which is unrelated to whether a fast-forward pull is safe — a
+            # stray file (editor cruft, a __pycache__ dir, a leftover backup
+            # zip that predates the .gitignore entry, etc.) shouldn't block
+            # updates the way an actual edit to a tracked file should.
+            blocking_lines = [
+                line for line in status.splitlines() if not line.startswith("??")
+            ]
+            if blocking_lines:
                 send_message({
                     "type": "result", "status": "error",
                     "detail": "Local changes exist in the repo checkout — resolve or stash them before updating.",
@@ -538,6 +546,7 @@ def main():
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             text=True,
+            encoding='utf-8', errors='replace',
             bufsize=1,
         )
 
