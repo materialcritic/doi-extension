@@ -446,8 +446,12 @@ doi-extension/
 - Make sure you fully restarted Chrome after installing/editing the native host, not just reloaded the extension.
 - If you moved the extension's *own* folder (not just `native-host/`) to a new path, its ID changes too (unpacked extensions with no `"key"` in `manifest.json` get an ID derived from their absolute path) — you'll need to update `allowed_origins` in `com.doi_grabber.host.json` to the new ID as well.
 
-**Download runs but fails immediately:**
-- Check the Python interpreter set in Settings actually has `requests` and `beautifulsoup4` installed: `<your-python-path> -c "import requests, bs4"`.
+**Download runs but fails immediately with `ModuleNotFoundError: No module named 'requests'`:**
+- Chrome spawned a Python interpreter that doesn't have `requests`/`beautifulsoup4` installed — usually because more than one Python is installed and the native host auto-detected the wrong one. Fix either way:
+  - Install the packages for whichever interpreter you actually want used: `python -m pip install requests beautifulsoup4` (or `py -m pip install requests beautifulsoup4` on Windows).
+  - Or explicitly set **Settings → Python interpreter path** to the full path of a `python`/`python.exe` that already has them — this always overrides auto-detection. Find candidates on Windows with `py -0`; check one has the packages with `<path> -c "import requests, bs4"`.
+- On Windows specifically, the auto-detect (`find_python_with_requests()` in `doi_host.py`) checks PATH, the `py` launcher (`py -3`), and the standard python.org/Microsoft Store install locations — but an unusual install location (e.g. a custom drive/folder, or a venv) can still fall outside all of those, landing on some other interpreter without the packages. Setting the Python interpreter path in Settings is the reliable fix in that case.
+- More generally, check the Python interpreter set in Settings actually has `requests` and `beautifulsoup4` installed: `<your-python-path> -c "import requests, bs4"`.
 
 **No DOI detected on a page that clearly has one:**
 - Some publishers (SAGE was one) put author/title metadata in nonstandard places `content.js` may not check yet — file a bug report from Settings with the URL and what you'd expect it to detect.

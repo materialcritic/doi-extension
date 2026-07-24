@@ -50,18 +50,46 @@ def find_python_with_requests():
         os.path.expanduser("~/.pyenv/shims/python3"),
     ]
 
+    if IS_WINDOWS:
+        # Windows rarely has a "python3" on PATH at all (that name is a
+        # macOS/Linux convention); the `py` launcher is the standard way to
+        # find whatever real interpreter(s) are installed, and it's usually
+        # on PATH even when "python" isn't. `py -3 -c ...` runs the default
+        # Python 3 the launcher knows about.
+        py_launcher = shutil.which("py")
+        if py_launcher:
+            candidates.append([py_launcher, "-3"])
+        # Common install locations Chrome's narrower spawn PATH may miss —
+        # python.org's per-user installer and the Microsoft Store package
+        # both land under one of these, versioned, so glob for any 3.x.
+        import glob
+        for pattern in (
+            os.path.expandvars(r"%LOCALAPPDATA%\Programs\Python\Python3*\python.exe"),
+            os.path.expandvars(r"%ProgramFiles%\Python3*\python.exe"),
+            os.path.expandvars(r"%LOCALAPPDATA%\Microsoft\WindowsApps\python3.exe"),
+        ):
+            candidates += glob.glob(pattern)
+
     seen = set()
     for candidate in candidates:
-        if not candidate or candidate in seen or not os.path.isfile(candidate):
+        # Most candidates are a single executable path; the `py` launcher
+        # entry above is [path, "-3"] since it needs that extra arg to pick
+        # a specific interpreter rather than launching the bare launcher.
+        if isinstance(candidate, list):
+            exe, extra_args = candidate[0], candidate[1:]
+        else:
+            exe, extra_args = candidate, []
+        key = tuple(candidate) if isinstance(candidate, list) else candidate
+        if not exe or key in seen or not os.path.isfile(exe):
             continue
-        seen.add(candidate)
+        seen.add(key)
         try:
             result = subprocess.run(
-                [candidate, "-c", "import requests, bs4"],
+                [exe] + extra_args + ["-c", "import requests, bs4"],
                 capture_output=True, timeout=5,
             )
             if result.returncode == 0:
-                return candidate
+                return [exe] + extra_args if extra_args else exe
         except (OSError, subprocess.SubprocessError):
             continue
 
@@ -490,7 +518,11 @@ def main():
     mirrors = settings.get("mirrors")
     unpaywall_email = settings.get("unpaywallEmail")
 
-    cmd = [python_bin, script_path, doi]
+    # python_bin is normally a single executable path, but on Windows it can
+    # be [py_launcher_path, "-3"] when that's what find_python_with_requests()
+    # settled on (see its docstring) — flatten either shape into argv.
+    python_bin_args = python_bin if isinstance(python_bin, list) else [python_bin]
+    cmd = python_bin_args + [script_path, doi]
     if output_dir:
         cmd += ["-d", output_dir]
     if mirrors:
