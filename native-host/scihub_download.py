@@ -161,6 +161,7 @@ class SciHubDownloader:
         if mirrors:
             self.SCIHUB_URLS = mirrors
         self.unpaywall_email = unpaywall_email or UNPAYWALL_EMAIL
+        self._captcha_hits = 0
         self.session = requests.Session()
         self.session.headers.update({
             'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
@@ -197,6 +198,14 @@ class SciHubDownloader:
             return match.group(0)
         return identifier
     
+    # Sci-Hub occasionally serves an "are you a robot?" bot-check page instead
+    # of a real result — this returns a real 200, so it's otherwise
+    # indistinguishable from "this mirror genuinely has nothing for this DOI"
+    # to every parsing method below. Detected by title text rather than a
+    # specific challenge widget (e.g. altcha), since that's more likely to
+    # stay stable if Sci-Hub swaps the underlying challenge provider again.
+    CAPTCHA_MARKER = 'are you are robot'
+
     def _try_mirror(self, base_url, doi):
         """Attempt to resolve a PDF URL from a single mirror. Returns pdf_url or None."""
         try:
@@ -209,6 +218,17 @@ class SciHubDownloader:
 
             if response.status_code != 200:
                 self.log("Non-200 status, skipping")
+                return None
+
+            if self.CAPTCHA_MARKER in response.text.lower():
+                # A genuine hit, just not one we can resolve without a real
+                # browser — worth surfacing distinctly from "no PDF found"
+                # so a false "not found" caused by this is diagnosable
+                # (rather than looking identical to the paper truly being
+                # absent from every mirror), and so callers can decide it's
+                # worth a retry rather than a hard stop.
+                self.log(f"{base_url} served a bot-check page, not a result")
+                self._captcha_hits += 1
                 return None
 
             soup = BeautifulSoup(response.content, 'html.parser')
@@ -296,6 +316,7 @@ class SciHubDownloader:
         toolbar badge/notification, since a false "unavailable" there is
         actively misleading rather than just a missed convenience.
         """
+        self._captcha_hits = 0
         for attempt in range(retries):
             pdf_url = self._race_mirrors_once(identifier)
             if pdf_url:
@@ -303,6 +324,14 @@ class SciHubDownloader:
             if attempt < retries - 1:
                 self.log(f"All mirrors failed (attempt {attempt + 1}/{retries}), retrying in {retry_delay}s...")
                 time.sleep(retry_delay)
+        if self._captcha_hits:
+            print(
+                f"\n(Note: {self._captcha_hits} Sci-Hub mirror response(s) were a "
+                "bot-check page rather than a definitive answer — this paper may "
+                "still be on Sci-Hub; trying again in a few minutes sometimes "
+                "succeeds.)",
+                flush=True,
+            )
         return None
 
     def _race_mirrors_once(self, identifier):
