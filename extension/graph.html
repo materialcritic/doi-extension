@@ -18,90 +18,42 @@
     --err: #e0574a;
     --ok: #6fae6f;
     /* Fixed categorical colors for the graph's three node/edge kinds — kept
-       stable across all 6 themes (same reasoning as the QR code staying
-       plain black/white regardless of theme) so the legend never drifts. */
+       stable across all 6 themes so the legend never drifts. */
     --teal: #1D9E75;
     --coral: #D85A30;
     --purple: #7F77DD;
   }
 
   :root[data-theme="parchment"] {
-    --bg: #f2ece0;
-    --surface: #ffffff;
-    --surface-2: #e7ddc8;
-    --border: #d8cbae;
-    --text: #2a2723;
-    --text-dim: #726a5c;
-    --accent: #b4783c;
-    --err: #c0392b;
-    --ok: #4c7a3f;
+    --bg: #f2ece0; --surface: #ffffff; --surface-2: #e7ddc8; --border: #d8cbae;
+    --text: #2a2723; --text-dim: #726a5c; --accent: #b4783c; --err: #c0392b; --ok: #4c7a3f;
   }
-
   :root[data-theme="slate"] {
-    --bg: #eef1f4;
-    --surface: #ffffff;
-    --surface-2: #e3e8ee;
-    --border: #d3dae3;
-    --text: #23282f;
-    --text-dim: #6b7280;
-    --accent: #4f6d8f;
-    --err: #c0392b;
-    --ok: #3f7d5c;
+    --bg: #eef1f4; --surface: #ffffff; --surface-2: #e3e8ee; --border: #d3dae3;
+    --text: #23282f; --text-dim: #6b7280; --accent: #4f6d8f; --err: #c0392b; --ok: #3f7d5c;
   }
-
   :root[data-theme="sage"] {
-    --bg: #f0f2ec;
-    --surface: #ffffff;
-    --surface-2: #e4e8dc;
-    --border: #d4dac6;
-    --text: #262b22;
-    --text-dim: #6f7566;
-    --accent: #6b8e5a;
-    --err: #c0392b;
-    --ok: #4c7a3f;
+    --bg: #f0f2ec; --surface: #ffffff; --surface-2: #e4e8dc; --border: #d4dac6;
+    --text: #262b22; --text-dim: #6f7566; --accent: #6b8e5a; --err: #c0392b; --ok: #4c7a3f;
   }
-
   :root[data-theme="minimal"] {
-    --bg: #ffffff;
-    --surface: #f7f7f7;
-    --surface-2: #f0f0f0;
-    --border: #dddddd;
-    --text: #111111;
-    --text-dim: #6e6e6e;
-    --accent: #111111;
-    --err: #b3261e;
-    --ok: #2e7d32;
+    --bg: #ffffff; --surface: #f7f7f7; --surface-2: #f0f0f0; --border: #dddddd;
+    --text: #111111; --text-dim: #6e6e6e; --accent: #111111; --err: #b3261e; --ok: #2e7d32;
   }
-
   :root[data-theme="carrot"] {
-    --bg: #fdf3e7;
-    --surface: #ffffff;
-    --surface-2: #fbe4c4;
-    --border: #f0c98a;
-    --text: #3a2410;
-    --text-dim: #8a6a3c;
-    --accent: #e8752c;
-    --err: #c0392b;
-    --ok: #4c7a3f;
+    --bg: #fdf3e7; --surface: #ffffff; --surface-2: #fbe4c4; --border: #f0c98a;
+    --text: #3a2410; --text-dim: #8a6a3c; --accent: #e8752c; --err: #c0392b; --ok: #4c7a3f;
   }
 
   body {
     font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
-    background: var(--bg);
-    color: var(--text);
-    height: 100vh;
-    overflow: hidden;
-    display: flex;
-    flex-direction: column;
+    background: var(--bg); color: var(--text); height: 100vh; overflow: hidden;
+    display: flex; flex-direction: column;
   }
 
   header {
-    padding: 10px 16px;
-    border-bottom: 1px solid var(--border);
-    display: flex;
-    align-items: center;
-    gap: 16px;
-    flex: 0 0 auto;
+    padding: 10px 16px; border-bottom: 1px solid var(--border);
+    display: flex; align-items: center; gap: 16px; flex: 0 0 auto;
   }
   header .header-text { flex: 1; min-width: 0; }
   header h1 { font-size: 15px; font-weight: 600; }
@@ -112,40 +64,53 @@
   .sw { width: 9px; height: 9px; border-radius: 2px; display: inline-block; }
 
   #btn-theme-toggle {
-    background: var(--surface-2);
-    border: 1px solid var(--border);
-    color: var(--text);
-    width: 32px;
-    height: 32px;
-    border-radius: 8px;
-    font-size: 13px;
-    cursor: pointer;
-    flex-shrink: 0;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    padding: 0;
-    line-height: 1;
+    background: var(--surface-2); border: 1px solid var(--border); color: var(--text);
+    width: 32px; height: 32px; border-radius: 8px; font-size: 13px; cursor: pointer;
+    flex-shrink: 0; display: flex; align-items: center; justify-content: center; padding: 0; line-height: 1;
   }
   #btn-theme-toggle:hover { background: var(--surface); }
+
+  /* Direction / Depth filter bar */
+  #toolbar {
+    display: flex; align-items: center; gap: 24px; flex-wrap: wrap;
+    padding: 8px 16px; border-bottom: 1px solid var(--border); flex: 0 0 auto;
+  }
+  .ctl { display: flex; align-items: center; gap: 10px; }
+  .ctl-label { font-size: 12px; color: var(--text-dim); }
+  .seg { display: flex; }
+  .seg button {
+    background: var(--surface-2); border: 1px solid var(--border); border-right: none;
+    color: var(--text); font-size: 13px; padding: 6px 14px; cursor: pointer; line-height: 1.2;
+  }
+  .seg button:first-child { border-radius: 8px 0 0 8px; }
+  .seg button:last-child { border-radius: 0 8px 8px 0; border-right: 1px solid var(--border); }
+  .seg button:hover { background: var(--surface); }
+  .seg button.on { background: var(--accent); color: #fff; border-color: var(--accent); }
 
   #stage { flex: 1; position: relative; overflow: hidden; }
   svg { width: 100%; height: 100%; cursor: grab; display: block; }
   svg.drag { cursor: grabbing; }
+  #svg text { user-select: none; -webkit-user-select: none; }
+
+  /* Node + edge colors are LIVE CSS vars (not baked at draw time), so they
+     follow the active theme automatically — this is the dark-mode fix. */
   .edge { fill: none; opacity: .45; }
+  .edge-back { stroke: var(--teal); }
+  .edge-fwd { stroke: var(--coral); }
+
+  .gnode { cursor: pointer; }
+  .gnode rect { stroke-width: 0.5; }
+  .gnode:hover rect { stroke-width: 1.5; }
+  .n-back rect { fill: var(--teal); fill-opacity: .14; stroke: var(--teal); }
+  .n-fwd rect  { fill: var(--coral); fill-opacity: .14; stroke: var(--coral); }
+  .n-seed rect { fill: var(--purple); fill-opacity: .14; stroke: var(--purple); }
+  .n-title { fill: var(--text); font-size: 12px; }
+  .n-author { fill: var(--text-dim); font-size: 10.5px; }
 
   #tip {
-    position: absolute;
-    z-index: 10;
-    max-width: 340px;
-    background: var(--surface);
-    border: 1px solid var(--border);
-    border-radius: 8px;
-    padding: 10px 12px;
-    box-shadow: 0 6px 20px rgba(0, 0, 0, .25);
-    font-size: 13px;
-    pointer-events: none;
-    display: none;
+    position: absolute; z-index: 10; max-width: 340px; background: var(--surface);
+    border: 1px solid var(--border); border-radius: 8px; padding: 10px 12px;
+    box-shadow: 0 6px 20px rgba(0, 0, 0, .25); font-size: 13px; pointer-events: none; display: none;
   }
   #tip .t { font-weight: 600; margin-bottom: 4px; line-height: 1.4; color: var(--text); }
   #tip .au { font-size: 12px; color: var(--text-dim); margin-bottom: 6px; }
@@ -153,15 +118,8 @@
   #tip .d { margin-top: 6px; font-size: 11px; color: var(--text-dim); word-break: break-all; }
 
   #empty {
-    position: absolute;
-    inset: 0;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    color: var(--text-dim);
-    font-size: 14px;
-    text-align: center;
-    padding: 0 24px;
+    position: absolute; inset: 0; display: flex; align-items: center; justify-content: center;
+    color: var(--text-dim); font-size: 14px; text-align: center; padding: 0 24px;
   }
 </style>
 </head>
@@ -169,7 +127,7 @@
   <header>
     <div class="header-text">
       <h1>Citation Snowball</h1>
-      <p>Seed centered · references left · citations right — drag to pan, scroll to zoom, hover a paper for its abstract</p>
+      <p>Seed centered · references left · citations right — drag to pan, scroll to zoom, click a paper to open it, hover for its abstract</p>
     </div>
     <div class="legend">
       <span><i class="sw" style="background:var(--teal)"></i>references</span>
@@ -178,6 +136,20 @@
     </div>
     <button id="btn-theme-toggle" data-theme-icon onclick="toggleTheme()" title="Toggle theme">🌙</button>
   </header>
+  <div id="toolbar">
+    <div class="ctl">
+      <span class="ctl-label">Direction</span>
+      <div class="seg" id="dir-seg">
+        <button data-dir="backward">Backward</button>
+        <button data-dir="both" class="on">Both</button>
+        <button data-dir="forward">Forward</button>
+      </div>
+    </div>
+    <div class="ctl">
+      <span class="ctl-label">Depth</span>
+      <div class="seg" id="depth-seg"></div>
+    </div>
+  </div>
   <div id="stage">
     <svg id="svg"><g id="vp"></g></svg>
     <div id="tip"></div>

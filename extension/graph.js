@@ -3,35 +3,41 @@
   const vp = document.getElementById("vp");
   const tip = document.getElementById("tip");
   const empty = document.getElementById("empty");
+  const dirSeg = document.getElementById("dir-seg");
+  const depthSeg = document.getElementById("depth-seg");
   const NS = "http://www.w3.org/2000/svg";
   const abstractCache = {};
 
-  // Cached so a theme change can redraw without re-reading storage.
-  let lastGraphData = null;
+  let graph = null;        // { seed, nodes, edges }
+  let viewDir = "both";    // "backward" | "both" | "forward"
+  let viewDepth = 1;       // show hops <= viewDepth
+  let maxDepth = 1;
+  let seedDoiG = "";
+  let panZoomWired = false;
 
   chrome.storage.local.get("snowballGraph", (res) => {
     const g = res && res.snowballGraph;
     if (!g || !g.nodes || !g.nodes.length) return; // keep #empty visible
     empty.style.display = "none";
-    lastGraphData = g;
-    render(g, true);
-  });
+    graph = g;
 
-  // Node/edge fill/stroke/text colors are baked into SVG attributes from
-  // cssVar() at draw time — not live `var(--x)` CSS references — so they
-  // never repaint on their own when the theme changes (unlike the header/
-  // background, which use real CSS variables and update automatically).
-  // Redraw explicitly whenever theme.js flips the active theme.
-  chrome.storage.onChanged.addListener((changes, area) => {
-    if (area === "sync" && (changes.theme || changes.lightTheme) && lastGraphData) {
-      setTimeout(() => render(lastGraphData, false), 0);
+    const seed = g.seed || {};
+    seedDoiG = norm(seed.doi);
+    if (!g.nodes.some((n) => norm(n.doi) === seedDoiG && n.via === "seed")) {
+      g.nodes.unshift({ doi: seedDoiG, title: seed.title || "Seed paper", author: seed.author || "", depth: 0, via: "seed" });
     }
+
+    maxDepth = g.nodes.reduce((m, n) => Math.max(m, n.depth || 0), 1);
+    viewDepth = maxDepth; // show everything on first open
+    buildDepthButtons();
+    wireControls();
+
+    render("full");
+    if (!panZoomWired) { wirePanZoom(); panZoomWired = true; }
   });
 
   function el(n, a) { const e = document.createElementNS(NS, n); for (const k in (a || {})) e.setAttribute(k, a[k]); return e; }
   function norm(d) { return String(d || "").toLowerCase().replace(/^https?:\/\/(dx\.)?doi\.org\//, "").replace(/^doi:/, ""); }
-  function cssVar(name) { return getComputedStyle(document.documentElement).getPropertyValue(name).trim() || "#888"; }
-  function hexA(hex, a) { const m = hex.replace("#", ""); if (m.length !== 6) return hex; const r = parseInt(m.slice(0, 2), 16), g = parseInt(m.slice(2, 4), 16), b = parseInt(m.slice(4, 6), 16); return "rgba(" + r + "," + g + "," + b + "," + a + ")"; }
   function truncate(s, max) { s = String(s || ""); return s.length > max ? s.slice(0, max - 1).replace(/\s+$/, "") + "…" : s; }
 
   function colIndex(n) { return n.via === "seed" ? 0 : (n.via === "backward" ? -n.depth : n.depth); }
@@ -56,16 +62,23 @@
 
   const NODEW = 180, NODEH = 62, GAPV = 14, COLW = 220;
 
-  function render(g, isInitial) {
-    const seed = g.seed || {};
-    const seedDoi = norm(seed.doi);
-    const nodes = g.nodes.slice();
-    if (!nodes.some((n) => norm(n.doi) === seedDoi && n.via === "seed")) {
-      nodes.unshift({ doi: seedDoi, title: seed.title || "Seed paper", author: seed.author || "", depth: 0, via: "seed" });
-    }
+  // Client-side filter: seed always shown; direction hides one side; depth caps hops.
+  function visibleNodes() {
+    return graph.nodes.filter((n) => {
+      if (n.via === "seed") return true;
+      if (viewDir === "backward" && n.via !== "backward") return false;
+      if (viewDir === "forward" && n.via !== "forward") return false;
+      if ((n.depth || 0) > viewDepth) return false;
+      return true;
+    });
+  }
 
-    vp.innerHTML = ""; // clear the previous draw (matters on a theme-change redraw)
+  // fitMode: "full" (reset zoom + center seed) | "recenter" (keep zoom, center seed) | "none"
+  function render(fitMode) {
+    if (!graph) return;
+    vp.innerHTML = "";
 
+    const nodes = visibleNodes();
     const colMap = {};
     nodes.forEach((n) => { const c = colIndex(n); (colMap[c] = colMap[c] || []).push(n); });
     const colKeys = Object.keys(colMap).map(Number).sort((a, b) => a - b);
@@ -79,40 +92,39 @@
       const startY = (maxH - block) / 2, x = ci * COLW;
       arr.forEach((n, j) => { pos[norm(n.doi)] = { x, y: startY + j * (NODEH + GAPV), w: NODEW, h: NODEH, node: n }; });
     });
-    const totalW = (colKeys.length - 1) * COLW + NODEW;
+    const totalW = colKeys.length ? (colKeys.length - 1) * COLW + NODEW : NODEW;
 
-    // edges (drawn first, under nodes)
+    // edges (drawn first, under nodes); classes carry the color (live CSS vars)
     const drawn = {};
-    (g.edges || []).forEach((e) => {
+    (graph.edges || []).forEach((e) => {
       const a = pos[norm(e.from)], b = pos[norm(e.to)];
-      if (!a || !b) return;
+      if (!a || !b) return; // an endpoint filtered out
       const key = norm(e.from) + ">" + norm(e.to);
       if (drawn[key]) return; drawn[key] = 1;
-      const col = b.node.via === "forward" ? cssVar("--coral") : cssVar("--teal");
+      const ecls = b.node.via === "forward" ? "edge-fwd" : "edge-back";
       let sx, sy, ex, ey;
       if (b.x < a.x) { sx = a.x; sy = a.y + a.h / 2; ex = b.x + b.w; ey = b.y + b.h / 2; }
       else { sx = a.x + a.w; sy = a.y + a.h / 2; ex = b.x; ey = b.y + b.h / 2; }
       const mx = (sx + ex) / 2;
-      vp.appendChild(el("path", { d: "M " + sx + " " + sy + " C " + mx + " " + sy + " " + mx + " " + ey + " " + ex + " " + ey, class: "edge", stroke: col }));
+      vp.appendChild(el("path", { d: "M " + sx + " " + sy + " C " + mx + " " + sy + " " + mx + " " + ey + " " + ex + " " + ey, class: "edge " + ecls }));
     });
 
-    // nodes
+    // nodes — color via class, doi via data-attr (used for click-to-open)
     Object.keys(pos).forEach((doi) => {
       const p = pos[doi], n = p.node;
-      const accent = n.via === "seed" ? cssVar("--purple") : (n.via === "forward" ? cssVar("--coral") : cssVar("--teal"));
-      const grp = el("g", {});
-      grp.style.cursor = "pointer";
-      grp.appendChild(el("rect", { x: p.x, y: p.y, width: p.w, height: p.h, rx: 6, fill: hexA(accent, 0.14), stroke: accent, "stroke-width": 0.5 }));
+      const sideClass = n.via === "seed" ? "n-seed" : (n.via === "forward" ? "n-fwd" : "n-back");
+      const grp = el("g", { class: "gnode " + sideClass, "data-doi": doi });
+      grp.appendChild(el("rect", { x: p.x, y: p.y, width: p.w, height: p.h, rx: 6 }));
       const label = n.title && n.title.trim() ? n.title : doi;
       const lines = wrapTitle(label, 30, 2);
       const titleTop = p.y + 17;
       lines.forEach((ln, i) => {
-        const t = el("text", { x: p.x + 10, y: titleTop + i * 15, "font-size": 12, fill: cssVar("--text") });
+        const t = el("text", { x: p.x + 10, y: titleTop + i * 15, class: "n-title" });
         t.textContent = ln;
         grp.appendChild(t);
       });
       if (n.author && n.author.trim()) {
-        const at = el("text", { x: p.x + 10, y: titleTop + lines.length * 15 + 5, "font-size": 10.5, fill: cssVar("--text-dim") });
+        const at = el("text", { x: p.x + 10, y: titleTop + lines.length * 15 + 5, class: "n-author" });
         at.textContent = truncate(n.author, 34);
         grp.appendChild(at);
       }
@@ -122,10 +134,35 @@
       vp.appendChild(grp);
     });
 
-    if (isInitial) {
-      fitView(pos[seedDoi], totalW, maxH);
-      wirePanZoom();
+    const seedPos = pos[seedDoiG] || null;
+    if (fitMode === "full") fitView(seedPos, totalW, maxH, true);
+    else if (fitMode === "recenter") fitView(seedPos, totalW, maxH, false);
+  }
+
+  // ---- Direction / Depth controls ----
+  function buildDepthButtons() {
+    depthSeg.innerHTML = "";
+    for (let d = 1; d <= maxDepth; d++) {
+      const b = document.createElement("button");
+      b.textContent = String(d);
+      b.dataset.depth = String(d);
+      if (d === viewDepth) b.classList.add("on");
+      depthSeg.appendChild(b);
     }
+  }
+  function wireControls() {
+    dirSeg.addEventListener("click", (e) => {
+      const b = e.target.closest("button[data-dir]"); if (!b) return;
+      viewDir = b.dataset.dir;
+      [].forEach.call(dirSeg.children, (c) => c.classList.toggle("on", c === b));
+      render("recenter");
+    });
+    depthSeg.addEventListener("click", (e) => {
+      const b = e.target.closest("button[data-depth]"); if (!b) return;
+      viewDepth = parseInt(b.dataset.depth, 10);
+      [].forEach.call(depthSeg.children, (c) => c.classList.toggle("on", c === b));
+      render("recenter");
+    });
   }
 
   // ---- tooltip + lazy abstract ----
@@ -157,9 +194,7 @@
   function hideTip() { tipDoi = null; tip.style.display = "none"; }
 
   // Routes through the existing getWorkAbstract message action (background.js)
-  // instead of fetching OpenAlex directly here — reuses its OpenAlex-first/
-  // Crossref-fallback chain and the Tandfonline mis-scrape filter rather than
-  // duplicating (and losing) that coverage in a second, page-local copy.
+  // to reuse its OpenAlex-first / Crossref-fallback chain and Tandfonline filter.
   async function loadAbstract(doi) {
     if (doi in abstractCache) return abstractCache[doi];
     let txt = "";
@@ -171,21 +206,35 @@
     return txt;
   }
 
-  // ---- pan / zoom ----
+  // ---- pan / zoom + click-to-open ----
   let tx = 0, ty = 0, scale = 1;
   function apply() { vp.setAttribute("transform", "translate(" + tx + "," + ty + ") scale(" + scale + ")"); }
-  function fitView(seedPos, totalW, totalH) {
+  function fitView(seedPos, totalW, totalH, resetScale) {
     const r = svg.getBoundingClientRect();
-    scale = 1;
-    if (seedPos) { tx = r.width / 2 - (seedPos.x + seedPos.w / 2); ty = r.height / 2 - (seedPos.y + seedPos.h / 2); }
-    else { tx = (r.width - totalW) / 2; ty = (r.height - totalH) / 2; }
+    if (resetScale) scale = 1;
+    if (seedPos) { tx = r.width / 2 - (seedPos.x + seedPos.w / 2) * scale; ty = r.height / 2 - (seedPos.y + seedPos.h / 2) * scale; }
+    else { tx = (r.width - totalW * scale) / 2; ty = (r.height - totalH * scale) / 2; }
     apply();
   }
   function wirePanZoom() {
-    let dragging = false, lx = 0, ly = 0;
-    svg.addEventListener("mousedown", (e) => { e.preventDefault(); hideTip(); dragging = true; lx = e.clientX; ly = e.clientY; svg.classList.add("drag"); });
-    window.addEventListener("mouseup", () => { dragging = false; svg.classList.remove("drag"); });
-    window.addEventListener("mousemove", (e) => { if (!dragging) return; tx += e.clientX - lx; ty += e.clientY - ly; lx = e.clientX; ly = e.clientY; apply(); });
+    let dragging = false, moved = false, lx = 0, ly = 0, downDoi = null;
+    svg.addEventListener("mousedown", (e) => {
+      e.preventDefault(); hideTip();
+      dragging = true; moved = false; lx = e.clientX; ly = e.clientY;
+      const g = e.target.closest ? e.target.closest("[data-doi]") : null;
+      downDoi = g ? g.getAttribute("data-doi") : null;
+      svg.classList.add("drag");
+    });
+    window.addEventListener("mousemove", (e) => {
+      if (!dragging) return;
+      if (Math.abs(e.clientX - lx) + Math.abs(e.clientY - ly) > 4) moved = true;
+      tx += e.clientX - lx; ty += e.clientY - ly; lx = e.clientX; ly = e.clientY; apply();
+    });
+    window.addEventListener("mouseup", () => {
+      // A press with no meaningful drag, started on a node = a click -> open it.
+      if (dragging && !moved && downDoi) chrome.tabs.create({ url: "https://doi.org/" + downDoi });
+      dragging = false; downDoi = null; svg.classList.remove("drag");
+    });
     svg.addEventListener("wheel", (e) => {
       e.preventDefault();
       const r = svg.getBoundingClientRect(), mx = e.clientX - r.left, my = e.clientY - r.top;
