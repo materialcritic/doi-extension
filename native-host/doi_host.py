@@ -54,11 +54,29 @@ def find_python_with_requests():
         # Windows rarely has a "python3" on PATH at all (that name is a
         # macOS/Linux convention); the `py` launcher is the standard way to
         # find whatever real interpreter(s) are installed, and it's usually
-        # on PATH even when "python" isn't. `py -3 -c ...` runs the default
-        # Python 3 the launcher knows about.
+        # on PATH even when "python" isn't (python.org's installer only adds
+        # python.exe to PATH if the user opts in — the `py` launcher gets
+        # registered either way). Resolve it to the concrete interpreter
+        # path it would launch, rather than keeping "py -3" as a two-token
+        # command: spawning through the launcher makes it a wrapper process
+        # with the real pythonX.Y.exe as its *child*. That matters later —
+        # the hard-timeout watchdog kills the direct Popen child on a hang,
+        # and killing just the launcher leaves the interpreter underneath it
+        # running and still holding this host's stdout pipe open, so the
+        # read loop never sees EOF and the whole extension hangs "checking"
+        # forever instead of reporting a timeout. Resolving up front avoids
+        # the indirection (and that failure mode) entirely.
         py_launcher = shutil.which("py")
         if py_launcher:
-            candidates.append([py_launcher, "-3"])
+            try:
+                resolved = subprocess.run(
+                    [py_launcher, "-3", "-c", "import sys; print(sys.executable)"],
+                    capture_output=True, text=True, timeout=5,
+                )
+                if resolved.returncode == 0 and resolved.stdout.strip():
+                    candidates.append(resolved.stdout.strip())
+            except (OSError, subprocess.SubprocessError):
+                pass
         # Common install locations Chrome's narrower spawn PATH may miss —
         # python.org's per-user installer and the Microsoft Store package
         # both land under one of these, versioned, so glob for any 3.x.
@@ -111,6 +129,28 @@ DOWNLOAD_LOG_PATH = os.path.join(SCRIPT_DIR, "download_log.txt")
 # subfolder of the repo root, e.g. a clone of github.com/materialcritic/doi-extension).
 REPO_DIR = os.path.dirname(SCRIPT_DIR)
 # ─────────────────────────────────────────────────────────────────────────────
+
+
+def kill_process_tree(proc):
+    """Terminate proc and any child processes it spawned.
+
+    Plain proc.kill() only terminates the immediate child. On POSIX that's
+    always enough here (scihub_download.py never forks its own children),
+    but on Windows it isn't safe to assume PYTHON_BIN is always a direct
+    interpreter — a wrapper process (the `py` launcher is the common case,
+    see find_python_with_requests()) spawns the real interpreter as a
+    grandchild, and killing only the wrapper leaves that grandchild running
+    and still holding the stdout pipe open, so the read loop below never
+    sees EOF. taskkill /T recurses the whole tree in one call, so this stays
+    correct even if some future PYTHON_BIN value reintroduces a wrapper hop.
+    """
+    if IS_WINDOWS:
+        subprocess.run(
+            ["taskkill", "/F", "/T", "/PID", str(proc.pid)],
+            capture_output=True,
+        )
+    else:
+        proc.kill()
 
 
 def open_in_file_manager(path):
@@ -526,9 +566,12 @@ def main():
     mirrors = settings.get("mirrors")
     unpaywall_email = settings.get("unpaywallEmail")
 
-    # python_bin is normally a single executable path, but on Windows it can
-    # be [py_launcher_path, "-3"] when that's what find_python_with_requests()
-    # settled on (see its docstring) — flatten either shape into argv.
+    # find_python_with_requests() always resolves to a single concrete
+    # interpreter path now (see its docstring for why: spawning through a
+    # wrapper like the `py` launcher instead is what caused the Windows
+    # hang-forever bug this file's kill_process_tree() works around). Kept
+    # as a list-or-string flatten anyway since PYTHON_BIN can be overridden
+    # by Settings' free-text Python interpreter path field.
     python_bin_args = python_bin if isinstance(python_bin, list) else [python_bin]
     cmd = python_bin_args + [script_path, doi]
     if output_dir:
@@ -541,6 +584,14 @@ def main():
         cmd += ["--check"]
 
     try:
+        popen_kwargs = {}
+        if IS_WINDOWS:
+            # Without this, spawning a console-subsystem python.exe from a
+            # windowless host (Chrome launched doi_host.py with no console of
+            # its own) makes Windows allocate a fresh console window for it —
+            # a visible flash on every single DOI check/download otherwise.
+            popen_kwargs["creationflags"] = subprocess.CREATE_NO_WINDOW
+
         proc = subprocess.Popen(
             cmd,
             stdout=subprocess.PIPE,
@@ -548,6 +599,7 @@ def main():
             text=True,
             encoding='utf-8', errors='replace',
             bufsize=1,
+            **popen_kwargs,
         )
 
         # Absolute ceiling: kills the child even if it hangs with stdout open
@@ -557,7 +609,7 @@ def main():
         # races apart) before Unpaywall/publisher/download tiers even start —
         # so this only ever catches a true hang, not slow-but-progressing work.
         HARD_TIMEOUT_SECONDS = 180
-        watchdog = threading.Timer(HARD_TIMEOUT_SECONDS, proc.kill)
+        watchdog = threading.Timer(HARD_TIMEOUT_SECONDS, kill_process_tree, args=(proc,))
         watchdog.start()
         try:
             result = None

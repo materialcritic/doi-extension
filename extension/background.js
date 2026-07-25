@@ -398,6 +398,19 @@ function matchesAuthor(authors, family, given) {
 const checkQueue = [];
 let checkInFlight = false;
 
+// Absolute ceiling on a single check, independent of anything doi_host.py
+// does on its own end. The queue above is serialized (one check at a time,
+// deliberately — see the comment on checkQueue), so a native-messaging port
+// that never sends a message AND never disconnects wedges every future check
+// forever, not just the current one, until Chrome itself restarts. That
+// shouldn't happen — doi_host.py has its own ~270s worst-case ceiling
+// (a 180s hard-timeout watchdog, then up to 90s for proc.wait) — but a
+// client-side backstop set safely above that means a regression there (or
+// some other never-responds host failure) degrades to "this one check timed
+// out" instead of "nothing ever works again this session." 300s intentionally
+// leaves headroom above doi_host.py's own worst case rather than racing it.
+const CHECK_TIMEOUT_MS = 300000;
+
 function runNextCheck() {
   if (checkInFlight || checkQueue.length === 0) return;
   const { doi, tabId, title, authors } = checkQueue.shift();
@@ -405,11 +418,26 @@ function runNextCheck() {
 
   getSettings().then((settings) => {
     const port = chrome.runtime.connectNative(NATIVE_HOST);
+    let settled = false;
 
     const finish = () => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timeoutId);
       checkInFlight = false;
       runNextCheck();
     };
+
+    const timeoutId = setTimeout(() => {
+      clearBadge(tabId);
+      tabState[tabId] = { doi, title, authors, status: "unknown" };
+      try {
+        port.disconnect();
+      } catch (e) {
+        // Already disconnected — fine, finish() below is what matters.
+      }
+      finish();
+    }, CHECK_TIMEOUT_MS);
 
     port.onMessage.addListener((message) => {
       if (message.type === "progress") return;
