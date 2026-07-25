@@ -20,6 +20,9 @@
     "https://www.gravatar.com/*"
   ],
   "options_page": "options.html",
+  "omnibox": {
+    "keyword": "doi"
+  },
   "content_scripts": [
     {
       "matches": ["http://*/*", "https://*/*"],

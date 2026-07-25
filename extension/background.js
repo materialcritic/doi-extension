@@ -1857,3 +1857,171 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     return true;
   }
 });
+
+// ---------------------------------------------------------------------------
+// Omnibox: type "doi" + Tab/Space in the address bar, then a title / author /
+// DOI. Searches Crossref and downloads the chosen paper without visiting its
+// page. Enter routes through the same downloadDOI() path as the toolbar button
+// and Alt+D, so Sci-Hub → Unpaywall → publisher fallback is unchanged.
+// ---------------------------------------------------------------------------
+
+const OMNIBOX_ROWS = 6;            // Chrome only renders the first handful anyway
+const OMNIBOX_DEBOUNCE_MS = 250;   // don't hit Crossref on every keystroke
+
+let omniboxDebounceTimer = null;
+let omniboxAbort = null;
+
+// Chrome parses a suggestion's `description` as XML markup (<match>, <dim>,
+// <url>), so any literal & < > " ' must be escaped or Chrome silently drops
+// the whole suggestion with a "markup parsing failed" error.
+function escapeOmniboxXml(s) {
+  return String(s)
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&apos;");
+}
+
+const ABSTRACT_SNIPPET_MAX = 220; // characters; Chrome truncates the rest to fit
+
+// Crossref returns abstracts as JATS XML (<jats:p>…</jats:p>), often with a
+// leading <jats:title>Abstract</jats:title>. Reduce to a clean one-line snippet.
+function cleanAbstractSnippet(raw) {
+  if (!raw) return "";
+  let text = decodeHtmlEntities(String(raw).replace(/<[^>]+>/g, " "));
+  text = text.replace(/\s+/g, " ").trim();
+  text = text.replace(/^(abstract|summary)[\s:.\-–]+/i, ""); // drop a leading label
+  if (text.length > ABSTRACT_SNIPPET_MAX) {
+    text = text.slice(0, ABSTRACT_SNIPPET_MAX).replace(/\s+\S*$/, "") + "…";
+  }
+  return text;
+}
+
+function omniboxItemToParts(item) {
+  const title =
+    decodeHtmlEntities(Array.isArray(item.title) ? item.title[0] : item.title || "") ||
+    "Untitled";
+  const authorList = Array.isArray(item.author) ? item.author : [];
+  const authors =
+    authorList
+      .slice(0, 3)
+      .map((a) => a.family || a.name || "")
+      .filter(Boolean)
+      .join(", ") + (authorList.length > 3 ? " et al." : "");
+  const journal = Array.isArray(item["container-title"])
+    ? item["container-title"][0]
+    : item["container-title"] || "";
+  const year =
+    (item.issued &&
+      item.issued["date-parts"] &&
+      item.issued["date-parts"][0] &&
+      item.issued["date-parts"][0][0]) ||
+    "";
+  return {
+    title,
+    authors,
+    journal,
+    year,
+    doi: item.DOI || "",
+    abstract: cleanAbstractSnippet(item.abstract),
+  };
+}
+
+async function fetchOmniboxSuggestions(query, signal) {
+  // If Crossref calls are centralized elsewhere in this file (e.g. a helper
+  // that adds a mailto= for Crossref's polite pool), swap this fetch for that.
+  const url =
+    "https://api.crossref.org/works?rows=" +
+    OMNIBOX_ROWS +
+    "&select=DOI,title,author,container-title,issued,abstract" +
+    "&query.bibliographic=" +
+    encodeURIComponent(query);
+  const res = await fetch(url, { signal });
+  if (!res.ok) return [];
+  const data = await res.json();
+  const items = (data && data.message && data.message.items) || [];
+  return items.filter((it) => it.DOI).map(omniboxItemToParts);
+}
+
+chrome.omnibox.onInputStarted.addListener(() => {
+  chrome.omnibox.setDefaultSuggestion({
+    description: "Search papers to download — type a title, author, or paste a DOI",
+  });
+});
+
+chrome.omnibox.onInputChanged.addListener((text, suggest) => {
+  const query = (text || "").trim();
+  if (omniboxDebounceTimer) clearTimeout(omniboxDebounceTimer);
+  if (omniboxAbort) omniboxAbort.abort();
+
+  if (!query) {
+    suggest([]);
+    return;
+  }
+
+  // Raw DOI pasted in — no lookup needed, offer a direct download.
+  const pastedDoi = extractDOIFromText(query);
+  if (pastedDoi) {
+    suggest([
+      {
+        content: pastedDoi,
+        description: "Download DOI <match>" + escapeOmniboxXml(pastedDoi) + "</match>",
+      },
+    ]);
+    return;
+  }
+
+  omniboxDebounceTimer = setTimeout(() => {
+    omniboxAbort = new AbortController();
+    fetchOmniboxSuggestions(query, omniboxAbort.signal)
+      .then((rows) => {
+        suggest(
+          rows.map((r) => {
+            const meta = [r.authors, r.journal, r.year].filter(Boolean).join(" · ");
+            // Title first, then a single dimmed tail: metadata, then abstract.
+            // Chrome truncates the line to the omnibox width, so the abstract
+            // (last) is what gets cut first on narrow windows.
+            const tail = [meta, r.abstract].filter(Boolean).join(" — ");
+            let desc = "<match>" + escapeOmniboxXml(r.title) + "</match>";
+            if (tail) desc += "  <dim>" + escapeOmniboxXml("— " + tail) + "</dim>";
+            // content = bare DOI; it's what onInputEntered receives on select.
+            return { content: r.doi, description: desc };
+          })
+        );
+      })
+      .catch((err) => {
+        if (err && err.name === "AbortError") return; // superseded by a newer keystroke
+        suggest([]);
+      });
+  }, OMNIBOX_DEBOUNCE_MS);
+});
+
+chrome.omnibox.onInputEntered.addListener((text) => {
+  const entered = (text || "").trim();
+  if (!entered) return;
+
+  // On selecting a suggestion, `text` is its content (a bare DOI). On a plain
+  // Enter over the user's own text, it may be a DOI or a freeform query.
+  const doi = extractDOIFromText(entered);
+  if (doi) {
+    downloadDOI(doi);
+    return;
+  }
+
+  // Freeform query with no DOI: resolve the top Crossref match, then download.
+  fetchOmniboxSuggestions(entered, undefined)
+    .then((rows) => {
+      if (rows[0] && rows[0].doi) {
+        downloadDOI(rows[0].doi);
+      } else {
+        chrome.notifications.create("omnibox-nores-" + Date.now(), {
+          type: "basic",
+          iconUrl: "icons/icon128.png",
+          title: "No paper found",
+          message: 'Nothing on Crossref matched: "' + entered.slice(0, 80) + '"',
+        });
+      }
+    })
+    .catch(() => {});
+});
