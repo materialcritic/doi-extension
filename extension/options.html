@@ -254,6 +254,52 @@
 
     #saved.visible { opacity: 1; }
 
+    .snowball-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+      gap: 16px 12px;
+    }
+
+    .snowball-grid .field { margin-bottom: 0; }
+
+    #snowball-results .row {
+      display: flex;
+      justify-content: space-between;
+      gap: 12px;
+      padding: 8px 10px;
+      font-size: 12.5px;
+      border-bottom: 1px solid var(--border);
+    }
+
+    #snowball-results .row:last-child { border-bottom: none; }
+
+    #snowball-results .row-title {
+      min-width: 0;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      color: var(--text);
+    }
+
+    #snowball-results .row-tag {
+      opacity: 0.55;
+    }
+
+    #snowball-results .row-link {
+      opacity: 0.7;
+      white-space: nowrap;
+      flex: 0 0 auto;
+      color: var(--text);
+    }
+
+    #snowball-results .list {
+      max-height: 280px;
+      overflow: auto;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      margin-top: 4px;
+    }
+
     .row {
       display: flex;
       justify-content: space-between;
@@ -696,6 +742,57 @@
         <button id="btn-export-ris" class="secondary">Export as RIS</button>
         <span id="citation-export-status"></span>
       </div>
+    </section>
+
+    <section class="card">
+      <h2>Citation Snowballing</h2>
+
+      <div class="field">
+        <label for="snowball-doi">Seed DOI</label>
+        <input type="text" id="snowball-doi" placeholder="10.1126/science.1225829" />
+        <div class="hint">
+          Expands through this paper's references (backward) and/or citations (forward) up to N hops, deduped by
+          DOI across the whole graph — then download the set or copy the DOIs.
+        </div>
+      </div>
+
+      <div class="snowball-grid">
+        <div class="field">
+          <label for="snowball-dir">Direction</label>
+          <select id="snowball-dir">
+            <option value="both" selected>Both</option>
+            <option value="backward">Backward (references)</option>
+            <option value="forward">Forward (citations)</option>
+          </select>
+        </div>
+        <div class="field">
+          <label for="snowball-depth">Depth</label>
+          <select id="snowball-depth">
+            <option value="1">1 hop</option>
+            <option value="2" selected>2 hops</option>
+            <option value="3">3 hops</option>
+          </select>
+        </div>
+        <div class="field">
+          <label for="snowball-cap">Per-level cap</label>
+          <input type="number" id="snowball-cap" value="25" min="1" max="200" />
+        </div>
+        <div class="field">
+          <label for="snowball-max">Max papers</label>
+          <input type="number" id="snowball-max" value="300" min="1" max="2000" />
+        </div>
+      </div>
+
+      <div class="hint">
+        Forward expansion grows fast — at depth 2+ the max-papers limit is what stops it. Large runs can take a
+        minute; progress shows below.
+      </div>
+
+      <div class="actions">
+        <button id="snowball-run">Run snowball</button>
+      </div>
+      <div id="snowball-progress" class="hint" style="margin-top: 10px"></div>
+      <div id="snowball-results"></div>
     </section>
   </div>
 

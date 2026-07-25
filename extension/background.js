@@ -2025,3 +2025,171 @@ chrome.omnibox.onInputEntered.addListener((text) => {
     })
     .catch(() => {});
 });
+
+// ---------------------------------------------------------------------------
+// Citation snowballing: from a seed DOI, walk references (backward) and/or
+// citations (forward) up to N hops, dedupe by DOI across the whole graph, cap
+// each node's expansion, and stop at a hard ceiling. Driven from the Settings
+// page over a long-lived port (keeps the service worker alive during the walk).
+// Results feed the existing downloadDOI() path.
+// ---------------------------------------------------------------------------
+
+const SNOWBALL_CONCURRENCY = 3;     // parallel fetches per level
+const SNOWBALL_DELAY_MS = 250;      // pause between concurrency batches
+const SNOWBALL_DL_DELAY_MS = 400;   // pause between downloads
+
+function normalizeDoi(raw) {
+  if (!raw) return "";
+  return String(raw)
+    .trim()
+    .toLowerCase()
+    .replace(/^https?:\/\/(dx\.)?doi\.org\//, "")
+    .replace(/^doi:/, "")
+    .replace(/[)\].,;'"]+$/, "");
+}
+
+// Polite-pool contact for Crossref/OpenAlex, read from Settings' configured
+// Unpaywall email (chrome.storage.sync, via getSettings()) rather than a
+// hardcoded constant — that's a per-user, changeable setting, not a fixed
+// value this file could bake in at edit time.
+function snowballUrl(url, mailto) {
+  if (!mailto) return url;
+  return url + (url.indexOf("?") >= 0 ? "&" : "?") + "mailto=" + encodeURIComponent(mailto);
+}
+
+function snowballSleep(ms) { return new Promise((r) => setTimeout(r, ms)); }
+
+async function snowballSafe(promise) {
+  try { return await promise; } catch (e) { return { total: 0, neighbors: [] }; }
+}
+
+// Backward neighbors: the DOIs this paper references (Crossref). Note: DOIs in
+// the path must NOT be URL-encoded — Crossref expects the raw DOI with slashes.
+async function snowballFetchReferences(doi, cap, mailto) {
+  const res = await fetch(snowballUrl("https://api.crossref.org/works/" + doi, mailto));
+  if (!res.ok) return { total: 0, neighbors: [] };
+  const data = await res.json();
+  const refs = (data.message && data.message.reference) || [];
+  const seen = new Set();
+  const neighbors = [];
+  for (const r of refs) {
+    if (!r.DOI) continue;
+    const nd = normalizeDoi(r.DOI);
+    if (!nd || seen.has(nd)) continue;
+    seen.add(nd);
+    neighbors.push({ doi: nd, title: r["article-title"] || r["journal-title"] || "", via: "backward" });
+    if (neighbors.length >= cap) break;
+  }
+  return { total: refs.length, neighbors };
+}
+
+// Forward neighbors: papers that cite this one, top-k by citation count
+// (OpenAlex). Two calls: resolve the DOI to an OpenAlex id, then query cites.
+async function snowballFetchCitations(doi, cap, mailto) {
+  const wRes = await fetch(snowballUrl("https://api.openalex.org/works/https://doi.org/" + doi, mailto));
+  if (!wRes.ok) return { total: 0, neighbors: [] };
+  const work = await wRes.json();
+  const shortId = (work.id || "").replace(/^https?:\/\/openalex\.org\//, "");
+  if (!shortId) return { total: work.cited_by_count || 0, neighbors: [] };
+  const cRes = await fetch(snowballUrl(
+    "https://api.openalex.org/works?filter=cites:" + shortId +
+    "&sort=cited_by_count:desc&per_page=" + Math.min(cap, 200) +
+    "&select=id,doi,title,cited_by_count",
+    mailto
+  ));
+  if (!cRes.ok) return { total: work.cited_by_count || 0, neighbors: [] };
+  const cData = await cRes.json();
+  const total = (cData.meta && cData.meta.count) || work.cited_by_count || 0;
+  const neighbors = [];
+  for (const w of (cData.results || [])) {
+    const nd = normalizeDoi(w.doi);
+    if (!nd) continue;
+    neighbors.push({ doi: nd, title: w.title || "", cites: w.cited_by_count || 0, via: "forward" });
+  }
+  return { total, neighbors };
+}
+
+async function runSnowball(params, port) {
+  const seed = normalizeDoi(params.doi);
+  if (!seed) { port.postMessage({ type: "error", message: "Enter a valid DOI." }); return; }
+  const dir = (params.dir === "backward" || params.dir === "forward") ? params.dir : "both";
+  const maxDepth = Math.max(1, Math.min(4, parseInt(params.depth, 10) || 2));
+  const cap = Math.max(1, Math.min(200, parseInt(params.cap, 10) || 25));
+  const ceiling = Math.max(1, Math.min(2000, parseInt(params.max, 10) || 300));
+
+  const settings = await getSettings();
+  const mailto = settings.unpaywallEmail || "";
+
+  const visited = new Set([seed]);
+  const results = [];
+  const perLevel = {};
+  let merges = 0;
+  let processed = 0;
+  let frontier = [{ doi: seed, depth: 0 }];
+
+  while (frontier.length && results.length < ceiling) {
+    const nextLevel = [];
+    for (let i = 0; i < frontier.length && results.length < ceiling; i += SNOWBALL_CONCURRENCY) {
+      const batch = frontier.slice(i, i + SNOWBALL_CONCURRENCY);
+      await Promise.all(batch.map(async (node) => {
+        if (node.depth >= maxDepth) return;
+        const neigh = [];
+        if (dir !== "forward") {
+          const b = await snowballSafe(snowballFetchReferences(node.doi, cap, mailto));
+          for (const nb of b.neighbors) neigh.push(nb);
+        }
+        if (dir !== "backward") {
+          const f = await snowballSafe(snowballFetchCitations(node.doi, cap, mailto));
+          for (const nb of f.neighbors) neigh.push(nb);
+        }
+        for (const nb of neigh) {
+          if (results.length >= ceiling) break;
+          if (visited.has(nb.doi)) { merges++; continue; } // dedup across the whole graph
+          visited.add(nb.doi);
+          const depth = node.depth + 1;
+          results.push({ doi: nb.doi, title: nb.title || "", depth, via: nb.via, cites: nb.cites });
+          perLevel[depth] = (perLevel[depth] || 0) + 1;
+          if (depth < maxDepth) nextLevel.push({ doi: nb.doi, depth });
+        }
+      }));
+      processed += batch.length;
+      port.postMessage({
+        type: "progress",
+        processed,
+        found: results.length,
+        depth: (frontier[0] ? frontier[0].depth : 0) + 1,
+        ceiling,
+      });
+      await snowballSleep(SNOWBALL_DELAY_MS);
+    }
+    frontier = nextLevel;
+  }
+
+  port.postMessage({
+    type: "done",
+    results,
+    stats: { unique: results.length, merges, perLevel, capped: results.length >= ceiling },
+  });
+}
+
+async function runSnowballDownload(dois, port) {
+  // Reuses downloadDOI per paper — it's fire-and-forget (kicks off native
+  // messaging without resolving on completion), so this paces by call, not by
+  // finish; acceptable here, same as every other entry point that calls it.
+  let done = 0, failed = 0;
+  for (const doi of dois) {
+    try { await downloadDOI(doi); done++; }
+    catch (e) { failed++; }
+    port.postMessage({ type: "dlprogress", done, failed, total: dois.length });
+    await snowballSleep(SNOWBALL_DL_DELAY_MS);
+  }
+  port.postMessage({ type: "dldone", done, failed, total: dois.length });
+}
+
+chrome.runtime.onConnect.addListener((port) => {
+  if (port.name !== "snowball") return;
+  port.onMessage.addListener((msg) => {
+    if (msg && msg.cmd === "run") runSnowball(msg, port);
+    else if (msg && msg.cmd === "download") runSnowballDownload(msg.dois || [], port);
+  });
+});

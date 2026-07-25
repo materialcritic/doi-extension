@@ -860,3 +860,109 @@ if (location.hash === "#updates") {
 }
 
 checkForUpdate();
+
+// Citation snowballing controls on the Settings page.
+(function () {
+  const $ = (id) => document.getElementById(id);
+  const runBtn = $("snowball-run");
+  if (!runBtn) return;
+
+  const setStatus = (t) => { const p = $("snowball-progress"); if (p) p.textContent = t; };
+  const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+
+  runBtn.addEventListener("click", () => {
+    const doi = ($("snowball-doi").value || "").trim();
+    if (!doi) { setStatus("Enter a DOI to start."); return; }
+    $("snowball-results").innerHTML = "";
+    runBtn.disabled = true;
+    setStatus("Starting…");
+
+    const port = chrome.runtime.connect({ name: "snowball" });
+    port.onMessage.addListener((msg) => {
+      if (msg.type === "progress") {
+        setStatus("Expanding hop " + msg.depth + " · " + msg.found + " papers found (checked " + msg.processed + ")");
+      } else if (msg.type === "done") {
+        runBtn.disabled = false;
+        renderResults(msg.results, msg.stats);
+        port.disconnect();
+      } else if (msg.type === "error") {
+        runBtn.disabled = false;
+        setStatus(msg.message);
+        port.disconnect();
+      }
+    });
+    port.onDisconnect.addListener(() => { runBtn.disabled = false; });
+    port.postMessage({
+      cmd: "run",
+      doi,
+      dir: $("snowball-dir").value,
+      depth: parseInt($("snowball-depth").value, 10),
+      cap: parseInt($("snowball-cap").value, 10),
+      max: parseInt($("snowball-max").value, 10),
+    });
+  });
+
+  function renderResults(results, stats) {
+    const dois = results.map((r) => r.doi);
+    setStatus(
+      stats.unique + " unique papers · " + stats.merges + " duplicates merged" +
+      (stats.capped ? " · hit the max-papers limit" : "")
+    );
+    const wrap = $("snowball-results");
+    wrap.innerHTML = "";
+
+    const bar = document.createElement("div");
+    bar.className = "actions";
+
+    const dl = document.createElement("button");
+    dl.textContent = "Download all (" + dois.length + ")";
+    dl.className = "secondary";
+    dl.addEventListener("click", () => startDownload(dois));
+
+    const cp = document.createElement("button");
+    cp.textContent = "Copy DOIs";
+    cp.className = "secondary";
+    cp.addEventListener("click", () => {
+      navigator.clipboard.writeText(dois.join("\n")).then(() => setStatus("Copied " + dois.length + " DOIs to the clipboard."));
+    });
+
+    bar.appendChild(dl);
+    bar.appendChild(cp);
+    wrap.appendChild(bar);
+
+    const list = document.createElement("div");
+    list.className = "list";
+    results.forEach((r) => {
+      const row = document.createElement("div");
+      row.className = "row";
+      const left = document.createElement("div");
+      left.className = "row-title";
+      left.innerHTML = '<span class="row-tag">[' + r.via + " · hop " + r.depth + "]</span> " + (r.title ? esc(r.title) : r.doi);
+      const a = document.createElement("a");
+      a.href = "https://doi.org/" + r.doi;
+      a.textContent = r.doi;
+      a.target = "_blank";
+      a.rel = "noopener";
+      a.className = "row-link";
+      row.appendChild(left);
+      row.appendChild(a);
+      list.appendChild(row);
+    });
+    wrap.appendChild(list);
+  }
+
+  function startDownload(dois) {
+    if (!dois.length) return;
+    setStatus("Starting download of " + dois.length + " papers…");
+    const port = chrome.runtime.connect({ name: "snowball" });
+    port.onMessage.addListener((msg) => {
+      if (msg.type === "dlprogress") {
+        setStatus("Downloading " + msg.done + "/" + msg.total + (msg.failed ? " · " + msg.failed + " failed" : ""));
+      } else if (msg.type === "dldone") {
+        setStatus("Done — downloaded " + msg.done + "/" + msg.total + (msg.failed ? " · " + msg.failed + " failed" : ""));
+        port.disconnect();
+      }
+    });
+    port.postMessage({ cmd: "download", dois });
+  }
+})();
