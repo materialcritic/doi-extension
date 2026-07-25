@@ -873,6 +873,7 @@ checkForUpdate();
   let lastEdges = [];
   let lastSeedTitle = "";
   let lastSeedAuthor = "";
+  let activePort = null; // the in-flight "run" port, if any — lets Reset cancel it cleanly
 
   runBtn.addEventListener("click", () => {
     const doi = ($("snowball-doi").value || "").trim();
@@ -882,6 +883,7 @@ checkForUpdate();
     setStatus("Starting…");
 
     const port = chrome.runtime.connect({ name: "snowball" });
+    activePort = port;
     port.onMessage.addListener((msg) => {
       if (msg.type === "progress") {
         setStatus("Expanding hop " + msg.depth + " · " + msg.found + " papers found (checked " + msg.processed + ")");
@@ -898,7 +900,7 @@ checkForUpdate();
         port.disconnect();
       }
     });
-    port.onDisconnect.addListener(() => { runBtn.disabled = false; });
+    port.onDisconnect.addListener(() => { runBtn.disabled = false; if (activePort === port) activePort = null; });
     port.postMessage({
       cmd: "run",
       doi,
@@ -908,6 +910,31 @@ checkForUpdate();
       max: parseInt($("snowball-max").value, 10),
     });
   });
+
+  const resetBtn = $("snowball-reset");
+  if (resetBtn) {
+    resetBtn.addEventListener("click", () => {
+      // Cancel an in-flight run rather than leaving it to finish and clobber
+      // the just-cleared results — background.js's service worker keeps
+      // running the walk until the port disconnects, so this actually stops it.
+      if (activePort) {
+        try { activePort.disconnect(); } catch (e) { /* already gone */ }
+        activePort = null;
+      }
+      runBtn.disabled = false;
+      $("snowball-doi").value = "";
+      $("snowball-dir").value = "both";
+      $("snowball-depth").value = "2";
+      $("snowball-cap").value = "25";
+      $("snowball-max").value = "300";
+      $("snowball-results").innerHTML = "";
+      lastEdges = [];
+      lastSeedTitle = "";
+      lastSeedAuthor = "";
+      setStatus("");
+      $("snowball-doi").focus();
+    });
+  }
 
   function renderResults(results, stats) {
     const dois = results.map((r) => r.doi);
