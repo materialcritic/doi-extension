@@ -870,6 +870,10 @@ checkForUpdate();
   const setStatus = (t) => { const p = $("snowball-progress"); if (p) p.textContent = t; };
   const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
 
+  let lastEdges = [];
+  let lastSeedTitle = "";
+  let lastSeedAuthor = "";
+
   runBtn.addEventListener("click", () => {
     const doi = ($("snowball-doi").value || "").trim();
     if (!doi) { setStatus("Enter a DOI to start."); return; }
@@ -883,6 +887,9 @@ checkForUpdate();
         setStatus("Expanding hop " + msg.depth + " · " + msg.found + " papers found (checked " + msg.processed + ")");
       } else if (msg.type === "done") {
         runBtn.disabled = false;
+        lastEdges = msg.edges || [];
+        lastSeedTitle = msg.seedTitle || "";
+        lastSeedAuthor = msg.seedAuthor || "";
         renderResults(msg.results, msg.stats);
         port.disconnect();
       } else if (msg.type === "error") {
@@ -926,8 +933,24 @@ checkForUpdate();
       navigator.clipboard.writeText(dois.join("\n")).then(() => setStatus("Copied " + dois.length + " DOIs to the clipboard."));
     });
 
+    const gv = document.createElement("button");
+    gv.textContent = "View as graph";
+    gv.className = "secondary";
+    gv.addEventListener("click", () => {
+      chrome.storage.local.set({
+        snowballGraph: {
+          seed: { doi: ($("snowball-doi").value || "").trim(), title: lastSeedTitle, author: lastSeedAuthor },
+          nodes: results,
+          edges: lastEdges,
+        },
+      }, () => {
+        chrome.tabs.create({ url: chrome.runtime.getURL("graph.html") });
+      });
+    });
+
     bar.appendChild(dl);
     bar.appendChild(cp);
+    bar.appendChild(gv);
     wrap.appendChild(bar);
 
     const list = document.createElement("div");

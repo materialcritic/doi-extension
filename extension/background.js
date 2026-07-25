@@ -2065,6 +2065,16 @@ async function snowballSafe(promise) {
 
 // Backward neighbors: the DOIs this paper references (Crossref). Note: DOIs in
 // the path must NOT be URL-encoded — Crossref expects the raw DOI with slashes.
+// OpenAlex authorships -> a short display label: first author, "et al." if
+// there's more than one. Shared by the forward-citations query and the
+// title/author enrichment pass below.
+function snowballAuthorLabel(authorships) {
+  if (!authorships || !authorships.length) return "";
+  const first = authorships[0] && authorships[0].author && authorships[0].author.display_name;
+  if (!first) return "";
+  return first + (authorships.length > 1 ? " et al." : "");
+}
+
 async function snowballFetchReferences(doi, cap, mailto) {
   const res = await fetch(snowballUrl("https://api.crossref.org/works/" + doi, mailto));
   if (!res.ok) return { total: 0, neighbors: [] };
@@ -2077,7 +2087,10 @@ async function snowballFetchReferences(doi, cap, mailto) {
     const nd = normalizeDoi(r.DOI);
     if (!nd || seen.has(nd)) continue;
     seen.add(nd);
-    neighbors.push({ doi: nd, title: r["article-title"] || r["journal-title"] || "", via: "backward" });
+    // Crossref's reference entries sometimes carry a bare author surname
+    // string directly (no separate lookup needed); the enrichment pass below
+    // fills this in from OpenAlex for whatever's still missing afterward.
+    neighbors.push({ doi: nd, title: r["article-title"] || r["journal-title"] || "", author: r.author || "", via: "backward" });
     if (neighbors.length >= cap) break;
   }
   return { total: refs.length, neighbors };
@@ -2094,7 +2107,7 @@ async function snowballFetchCitations(doi, cap, mailto) {
   const cRes = await fetch(snowballUrl(
     "https://api.openalex.org/works?filter=cites:" + shortId +
     "&sort=cited_by_count:desc&per_page=" + Math.min(cap, 200) +
-    "&select=id,doi,title,cited_by_count",
+    "&select=id,doi,title,cited_by_count,authorships",
     mailto
   ));
   if (!cRes.ok) return { total: work.cited_by_count || 0, neighbors: [] };
@@ -2104,9 +2117,41 @@ async function snowballFetchCitations(doi, cap, mailto) {
   for (const w of (cData.results || [])) {
     const nd = normalizeDoi(w.doi);
     if (!nd) continue;
-    neighbors.push({ doi: nd, title: w.title || "", cites: w.cited_by_count || 0, via: "forward" });
+    neighbors.push({ doi: nd, title: w.title || "", cites: w.cited_by_count || 0, author: snowballAuthorLabel(w.authorships), via: "forward" });
   }
   return { total, neighbors };
+}
+
+// Fill in titles/authors OpenAlex has but the walk didn't capture (mostly
+// backward Crossref references, which usually lack both), 50 DOIs per
+// request. Whatever's still missing after this keeps the DOI as its label.
+async function enrichSnowballTitles(results, mailto) {
+  const need = results.filter((r) => !r.title || !r.title.trim() || !r.author || !r.author.trim());
+  for (let i = 0; i < need.length; i += 50) {
+    const chunk = need.slice(i, i + 50);
+    const filter = chunk.map((r) => "https://doi.org/" + r.doi).join("|");
+    try {
+      const res = await fetch(snowballUrl(
+        "https://api.openalex.org/works?per_page=50&select=doi,title,authorships&filter=doi:" + filter,
+        mailto
+      ));
+      if (res.ok) {
+        const data = await res.json();
+        const byDoi = {};
+        for (const w of (data.results || [])) {
+          const d = normalizeDoi(w.doi);
+          if (d) byDoi[d] = { title: w.title || "", author: snowballAuthorLabel(w.authorships) };
+        }
+        for (const r of chunk) {
+          const hit = byDoi[r.doi];
+          if (!hit) continue;
+          if (!r.title || !r.title.trim()) r.title = hit.title;
+          if (!r.author || !r.author.trim()) r.author = hit.author;
+        }
+      }
+    } catch (e) { /* leave these as DOI labels */ }
+    await snowballSleep(SNOWBALL_DELAY_MS);
+  }
 }
 
 async function runSnowball(params, port) {
@@ -2123,6 +2168,7 @@ async function runSnowball(params, port) {
   const visited = new Set([seed]);
   const results = [];
   const perLevel = {};
+  const edges = [];
   let merges = 0;
   let processed = 0;
   let frontier = [{ doi: seed, depth: 0 }];
@@ -2143,11 +2189,16 @@ async function runSnowball(params, port) {
           for (const nb of f.neighbors) neigh.push(nb);
         }
         for (const nb of neigh) {
-          if (results.length >= ceiling) break;
-          if (visited.has(nb.doi)) { merges++; continue; } // dedup across the whole graph
+          if (visited.has(nb.doi)) {
+            edges.push({ from: node.doi, to: nb.doi }); // convergence — keep the edge
+            merges++;
+            continue;
+          }
+          if (results.length >= ceiling) continue;      // ceiling hit: no new nodes
           visited.add(nb.doi);
           const depth = node.depth + 1;
-          results.push({ doi: nb.doi, title: nb.title || "", depth, via: nb.via, cites: nb.cites });
+          results.push({ doi: nb.doi, title: nb.title || "", author: nb.author || "", depth, via: nb.via, cites: nb.cites });
+          edges.push({ from: node.doi, to: nb.doi });
           perLevel[depth] = (perLevel[depth] || 0) + 1;
           if (depth < maxDepth) nextLevel.push({ doi: nb.doi, depth });
         }
@@ -2165,9 +2216,25 @@ async function runSnowball(params, port) {
     frontier = nextLevel;
   }
 
+  await enrichSnowballTitles(results, mailto);
+
+  let seedTitle = "";
+  let seedAuthor = "";
+  try {
+    const sr = await fetch(snowballUrl("https://api.openalex.org/works/https://doi.org/" + seed + "?select=title,authorships", mailto));
+    if (sr.ok) {
+      const sdata = await sr.json();
+      seedTitle = sdata.title || "";
+      seedAuthor = snowballAuthorLabel(sdata.authorships);
+    }
+  } catch (e) { /* seed keeps a generic label */ }
+
   port.postMessage({
     type: "done",
     results,
+    edges,
+    seedTitle,
+    seedAuthor,
     stats: { unique: results.length, merges, perLevel, capped: results.length >= ceiling },
   });
 }
