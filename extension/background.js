@@ -24,6 +24,8 @@ const AUTHOR_WATCHLIST_ALARM = "checkAuthorWatchlist";
 const UPDATE_CHECK_ALARM = "checkForUpdate";
 const UPDATE_CHECK_PERIOD_MINUTES = 720; // 12 hours
 
+const TOPIC_WATCHLIST_ALARM = "checkTopicWatchlist";
+
 // notifId -> issue params, so a click can open the right issue page.
 // Not persisted — a service worker restart just means old notifications
 // silently stop being clickable, which is an acceptable tradeoff here.
@@ -34,6 +36,7 @@ const GRAB_DOI_MENU_ID = "doi-grabber-grab-selection";
 chrome.runtime.onInstalled.addListener(() => {
   chrome.alarms.create(WATCHLIST_ALARM, { periodInMinutes: WATCHLIST_PERIOD_MINUTES });
   chrome.alarms.create(AUTHOR_WATCHLIST_ALARM, { periodInMinutes: WATCHLIST_PERIOD_MINUTES });
+  chrome.alarms.create(TOPIC_WATCHLIST_ALARM, { periodInMinutes: WATCHLIST_PERIOD_MINUTES });
   chrome.alarms.create(UPDATE_CHECK_ALARM, { periodInMinutes: UPDATE_CHECK_PERIOD_MINUTES });
 
   // Context menu items persist across service-worker restarts once created
@@ -52,6 +55,7 @@ chrome.runtime.onInstalled.addListener(() => {
 chrome.runtime.onStartup.addListener(() => {
   chrome.alarms.create(WATCHLIST_ALARM, { periodInMinutes: WATCHLIST_PERIOD_MINUTES });
   chrome.alarms.create(AUTHOR_WATCHLIST_ALARM, { periodInMinutes: WATCHLIST_PERIOD_MINUTES });
+  chrome.alarms.create(TOPIC_WATCHLIST_ALARM, { periodInMinutes: WATCHLIST_PERIOD_MINUTES });
   chrome.alarms.create(UPDATE_CHECK_ALARM, { periodInMinutes: UPDATE_CHECK_PERIOD_MINUTES });
 
   refreshUpdateCache();
@@ -113,6 +117,7 @@ chrome.contextMenus.onClicked.addListener((info, tab) => {
 chrome.alarms.onAlarm.addListener((alarm) => {
   if (alarm.name === WATCHLIST_ALARM) checkWatchlist();
   if (alarm.name === AUTHOR_WATCHLIST_ALARM) checkAuthorWatchlist();
+  if (alarm.name === TOPIC_WATCHLIST_ALARM) checkTopicWatchlist();
   if (alarm.name === UPDATE_CHECK_ALARM) refreshUpdateCache();
 });
 
@@ -225,6 +230,153 @@ function fetchLatestAuthorWork(author) {
         year: year || null,
       };
     });
+}
+
+// ---------- Trending in a topic (OpenAlex) ----------
+
+// Kept conservative so a brand-new paper with a couple of citations doesn't
+// top the list on noise.
+const TRENDING_MIN_AGE_DAYS = 21;      // ignore anything younger than this
+const TRENDING_MIN_CITATIONS = 3;      // velocity/momentum need at least this many cites
+const TRENDING_CANDIDATE_POOL = 200;   // OpenAlex works pulled (by cites) before re-ranking
+const TOPIC_WATCH_TOP_N = 10;          // size of the trending set tracked per followed topic
+
+function normalizeDoiUrl(doiUrl) {
+  if (!doiUrl) return null;
+  return doiUrl.replace(/^https?:\/\/(dx\.)?doi\.org\//i, "").toLowerCase() || null;
+}
+
+function ageFromDate(dateStr) {
+  if (!dateStr) return null;
+  const then = new Date(dateStr + "T00:00:00Z").getTime();
+  if (isNaN(then)) return null;
+  const days = (Date.now() - then) / 86400000;
+  return { days, months: days / 30.44 };
+}
+
+function isoDaysAgo(days) {
+  return new Date(Date.now() - days * 86400000).toISOString().slice(0, 10);
+}
+
+// An OpenAlex work -> the same shape author.js/issue.js render, plus the
+// velocity/momentum/spark fields the trending page adds.
+function trendingWorkFromOpenAlex(w) {
+  const age = ageFromDate(w.publication_date);
+  const cites = typeof w.cited_by_count === "number" ? w.cited_by_count : 0;
+  const months = age ? Math.max(age.months, 0.5) : null; // floor avoids divide-by-tiny
+  const velocity = months ? cites / months : 0;
+
+  const byYear = Array.isArray(w.counts_by_year) ? w.counts_by_year.slice() : [];
+  byYear.sort((a, b) => a.year - b.year);
+  const momentum = byYear.length ? (byYear[byYear.length - 1].cited_by_count || 0) : 0;
+  const spark = byYear.slice(-5).map((y) => y.cited_by_count || 0);
+
+  return {
+    doi: normalizeDoiUrl(w.doi),
+    title: decodeHtmlEntities(w.title || "(untitled)"),
+    journal: decodeHtmlEntities((w.primary_location && w.primary_location.source && w.primary_location.source.display_name) || ""),
+    year: w.publication_year || null,
+    pubDate: w.publication_date || null,
+    ageDays: age ? Math.round(age.days) : null,
+    citations: cites,
+    velocity: Math.round(velocity * 10) / 10,
+    momentum,
+    spark,
+    type: w.type || "",
+    abstract: reconstructOpenAlexAbstract(w.abstract_inverted_index),
+  };
+}
+
+// A topic filter is either a resolved OpenAlex topic id (T#####) or, if the
+// user never picked a suggestion, a free-text keyword search fallback.
+function topicFilterFor(topicId, topicName) {
+  if (topicId && /^T\d+$/i.test(topicId)) return "primary_topic.id:" + topicId;
+  return "default.search:" + encodeURIComponent(topicName || "");
+}
+
+// Recent works in a topic, fetched as a candidate pool ordered by citations,
+// then filtered by the noise floor. Returns the raw list; the PAGE does the
+// final velocity/momentum/total sort so the sort control is instant and
+// doesn't re-hit OpenAlex.
+function fetchTrendingWorks(topicFilter, windowMonths) {
+  const fromDate = isoDaysAgo(Math.round((windowMonths || 12) * 30.44));
+  const filters = [topicFilter, "from_publication_date:" + fromDate].join(",");
+  const url = "https://api.openalex.org/works?filter=" + filters +
+    "&sort=cited_by_count:desc&per_page=" + TRENDING_CANDIDATE_POOL +
+    "&select=id,doi,title,publication_date,publication_year,cited_by_count,counts_by_year,primary_location,type,abstract_inverted_index";
+
+  return fetch(url)
+    .then((r) => {
+      if (!r.ok) throw new Error("OpenAlex lookup failed (" + r.status + ")");
+      return r.json();
+    })
+    .then((data) => {
+      const results = (data.results || []).map(trendingWorkFromOpenAlex);
+      // Drop the very fresh / very thin ones so "trending" means real traction.
+      return results.filter((w) =>
+        (w.ageDays == null || w.ageDays >= TRENDING_MIN_AGE_DAYS) && w.citations >= TRENDING_MIN_CITATIONS
+      );
+    });
+}
+
+// Checks every followed topic: pulls the current top-N fastest-rising papers
+// and notifies when a newly-published paper has entered that set since last
+// check. First check after following just seeds the baseline silently (same
+// pattern as the journal/author watchlists).
+function checkTopicWatchlist() {
+  return new Promise((resolve) => {
+    chrome.storage.sync.get({ topicWatchlist: [] }, ({ topicWatchlist }) => {
+      if (topicWatchlist.length === 0) return resolve();
+
+      let changed = false;
+      const checks = topicWatchlist.map((entry) => {
+        const filter = topicFilterFor(entry.topicId, entry.topic);
+        return fetchTrendingWorks(filter, entry.windowMonths || 12)
+          .then((works) => {
+            const top = works
+              .filter((w) => w.doi)
+              .sort((a, b) => b.velocity - a.velocity)
+              .slice(0, TOPIC_WATCH_TOP_N);
+            const topDois = top.map((w) => w.doi);
+
+            if (!entry.seenDois) {
+              entry.seenDois = topDois;
+              entry.lastNewCount = 0;
+              changed = true;
+              return;
+            }
+
+            const seen = new Set(entry.seenDois);
+            const fresh = top.filter((w) => !seen.has(w.doi));
+            if (fresh.length > 0) {
+              const notifId = "doi-watch-topic-" + Date.now() + "-" + Math.random().toString(36).slice(2);
+              pendingWatchNotifications[notifId] = {
+                page: "trending.html",
+                topic: entry.topic || "",
+                topicId: entry.topicId || "",
+                window: String(entry.windowMonths || 12),
+                sort: entry.sort || "velocity",
+              };
+              chrome.notifications.create(notifId, {
+                type: "basic",
+                iconUrl: "icons/icon128.png",
+                title: fresh.length === 1 ? "New trending paper" : fresh.length + " new trending papers",
+                message: (entry.topic || "Topic") + " — " + fresh[0].title,
+              });
+              entry.lastNewCount = fresh.length;
+            }
+            entry.seenDois = topDois; // advance baseline either way
+            changed = true;
+          })
+          .catch(() => {}); // one topic failing shouldn't block the rest
+      });
+
+      Promise.all(checks).then(() => {
+        if (changed) chrome.storage.sync.set({ topicWatchlist }, resolve);
+        else resolve();
+      });
+    });
+  });
 }
 
 // Checks every watched author against its stored baseline DOI; notifies
@@ -1006,6 +1158,75 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
 
   if (request.action === "checkAuthorWatchlistNow") {
     checkAuthorWatchlist().then(() => sendResponse({ success: true }));
+    return true;
+  }
+
+  if (request.action === "searchTopics") {
+    // Autocomplete for the settings card — OpenAlex topics search.
+    const url = "https://api.openalex.org/topics?search=" + encodeURIComponent(request.query || "") +
+      "&per-page=8&select=id,display_name,description";
+    fetch(url)
+      .then((r) => (r.ok ? r.json() : Promise.reject(new Error("OpenAlex topics lookup failed (" + r.status + ")"))))
+      .then((data) => {
+        const topics = (data.results || []).map((t) => ({
+          id: (t.id || "").replace(/^https?:\/\/openalex\.org\//, ""),
+          name: t.display_name || "",
+          hint: t.description || "",
+        }));
+        sendResponse({ success: true, topics });
+      })
+      .catch((err) => sendResponse({ success: false, error: err.message }));
+    return true;
+  }
+
+  if (request.action === "getTrendingWorks") {
+    const filter = topicFilterFor(request.topicId, request.topic);
+    fetchTrendingWorks(filter, request.windowMonths)
+      .then((works) => sendResponse({ success: true, works }))
+      .catch((err) => sendResponse({ success: false, error: err.message }));
+    return true;
+  }
+
+  if (request.action === "getTopicWatchlist") {
+    chrome.storage.sync.get({ topicWatchlist: [] }, ({ topicWatchlist }) => sendResponse(topicWatchlist));
+    return true;
+  }
+
+  if (request.action === "toggleTopicWatch") {
+    chrome.storage.sync.get({ topicWatchlist: [] }, ({ topicWatchlist }) => {
+      const key = request.topicId || request.topic;
+      const idx = topicWatchlist.findIndex((t) => (t.topicId || t.topic) === key);
+      let watching;
+      if (idx >= 0) {
+        topicWatchlist.splice(idx, 1);
+        watching = false;
+      } else {
+        topicWatchlist.push({
+          topic: request.topic || "",
+          topicId: request.topicId || "",
+          windowMonths: request.windowMonths || 12,
+          sort: request.sort || "velocity",
+          seenDois: null,     // seeded silently on first check
+          lastNewCount: 0,
+        });
+        watching = true;
+      }
+      chrome.storage.sync.set({ topicWatchlist }, () => sendResponse({ success: true, watching }));
+    });
+    return true;
+  }
+
+  if (request.action === "removeTopicWatch") {
+    chrome.storage.sync.get({ topicWatchlist: [] }, ({ topicWatchlist }) => {
+      const key = request.topicId || request.topic;
+      const next = topicWatchlist.filter((t) => (t.topicId || t.topic) !== key);
+      chrome.storage.sync.set({ topicWatchlist: next }, () => sendResponse({ success: true }));
+    });
+    return true;
+  }
+
+  if (request.action === "checkTopicWatchlistNow") {
+    checkTopicWatchlist().then(() => sendResponse({ success: true }));
     return true;
   }
 

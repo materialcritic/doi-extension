@@ -262,6 +262,14 @@
 
     .snowball-grid .field { margin-bottom: 0; }
 
+    .trending-grid {
+      display: flex;
+      gap: 16px;
+      flex-wrap: wrap;
+    }
+
+    .trending-grid .field { margin-bottom: 0; min-width: 160px; }
+
     .row {
       display: flex;
       justify-content: space-between;
@@ -589,6 +597,53 @@
 
       <div class="actions">
         <button id="btn-check-author-watchlist" class="secondary">Check Now</button>
+      </div>
+    </section>
+
+    <section class="card">
+      <h2>Trending in a Topic</h2>
+
+      <div class="field">
+        <label for="trending-topic-input">Topic</label>
+        <input type="text" id="trending-topic-input" list="trending-topic-suggest" placeholder="diffusion models, CRISPR base editing…" autocomplete="off" />
+        <datalist id="trending-topic-suggest"></datalist>
+        <div class="hint">Recently published papers gaining citations fast — rising work, not all-time classics. Matched to an OpenAlex topic as you type.</div>
+      </div>
+
+      <div class="trending-grid">
+        <div class="field">
+          <label for="trending-window">Window</label>
+          <select id="trending-window">
+            <option value="6">Last 6 months</option>
+            <option value="12" selected>Last 12 months</option>
+            <option value="24">Last 24 months</option>
+          </select>
+        </div>
+        <div class="field">
+          <label for="trending-sort">Rank by</label>
+          <select id="trending-sort">
+            <option value="velocity" selected>Citation velocity</option>
+            <option value="momentum">Recent momentum</option>
+            <option value="citations">Total citations</option>
+          </select>
+        </div>
+      </div>
+
+      <div class="actions">
+        <button id="btn-browse-trending">Browse Trending</button>
+      </div>
+
+      <div class="field" id="topic-watchlist-list" style="margin-top: 20px">
+        <div class="skeleton-row"><div class="skeleton-bar" style="width: 50%;"></div><div class="skeleton-bar" style="width: 12%;"></div></div>
+      </div>
+
+      <div class="hint">
+        Follow a topic from the "Follow This Topic" button on its trending page. Checked automatically every 6 hours;
+        when a new fast-rising paper appears you'll get a notification you can click to open the trending list.
+      </div>
+
+      <div class="actions">
+        <button id="btn-check-topic-watchlist" class="secondary">Check Now</button>
       </div>
     </section>
 

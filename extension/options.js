@@ -406,6 +406,121 @@ document.getElementById("btn-check-author-watchlist").addEventListener("click", 
   });
 });
 
+function loadTopicWatchlist() {
+  const container = document.getElementById("topic-watchlist-list");
+  container.innerHTML = skeletonRowsHtml(2, "50%", "12%");
+
+  chrome.runtime.sendMessage({ action: "getTopicWatchlist" }, (topicWatchlist) => {
+    if (!Array.isArray(topicWatchlist) || topicWatchlist.length === 0) {
+      container.innerHTML = '<div class="hint">No topics followed yet.</div>';
+      return;
+    }
+    container.innerHTML = "";
+    topicWatchlist.forEach((t) => {
+      const row = document.createElement("div");
+      row.className = "row";
+
+      const label = document.createElement("span");
+      label.className = "row-label";
+      label.textContent = t.topic || "(topic)";
+
+      const right = document.createElement("span");
+      right.style.display = "flex";
+      right.style.alignItems = "center";
+
+      const value = document.createElement("span");
+      value.className = "row-value";
+      value.textContent = t.lastNewCount ? `${t.lastNewCount} new` : "watching";
+
+      const viewBtn = document.createElement("button");
+      viewBtn.className = "secondary";
+      viewBtn.style.marginRight = "8px";
+      viewBtn.textContent = "View";
+      viewBtn.addEventListener("click", () => {
+        const q = new URLSearchParams({
+          topic: t.topic || "",
+          topicId: t.topicId || "",
+          window: String(t.windowMonths || 12),
+          sort: t.sort || "velocity",
+        });
+        chrome.tabs.create({ url: chrome.runtime.getURL("trending.html") + "?" + q.toString() });
+      });
+
+      const removeBtn = document.createElement("button");
+      removeBtn.className = "row-remove";
+      removeBtn.title = "Stop following";
+      removeBtn.textContent = "✕";
+      removeBtn.addEventListener("click", () => {
+        chrome.runtime.sendMessage({ action: "removeTopicWatch", topic: t.topic, topicId: t.topicId }, loadTopicWatchlist);
+      });
+
+      right.appendChild(value);
+      right.appendChild(viewBtn);
+      right.appendChild(removeBtn);
+      row.appendChild(label);
+      row.appendChild(right);
+      container.appendChild(row);
+    });
+  });
+}
+
+const topicInputEl = document.getElementById("trending-topic-input");
+const topicSuggestEl = document.getElementById("trending-topic-suggest");
+const trendingWindowEl = document.getElementById("trending-window");
+const trendingSortEl = document.getElementById("trending-sort");
+const topicNameToId = new Map();
+
+let topicSuggestTimer = null;
+topicInputEl.addEventListener("input", () => {
+  const q = topicInputEl.value.trim();
+  if (topicSuggestTimer) clearTimeout(topicSuggestTimer);
+  if (q.length < 3) return;
+  topicSuggestTimer = setTimeout(() => {
+    chrome.runtime.sendMessage({ action: "searchTopics", query: q }, (resp) => {
+      if (!resp || !resp.success) return;
+      topicSuggestEl.innerHTML = "";
+      resp.topics.forEach((t) => {
+        topicNameToId.set(t.name, t.id);
+        const opt = document.createElement("option");
+        opt.value = t.name;
+        if (t.hint) opt.label = t.hint;
+        topicSuggestEl.appendChild(opt);
+      });
+    });
+  }, 250);
+});
+
+// Remember the window/sort defaults across visits.
+chrome.storage.sync.get({ trendingWindow: "12", trendingSort: "velocity" }, (s) => {
+  trendingWindowEl.value = s.trendingWindow;
+  trendingSortEl.value = s.trendingSort;
+});
+trendingWindowEl.addEventListener("change", () => chrome.storage.sync.set({ trendingWindow: trendingWindowEl.value }));
+trendingSortEl.addEventListener("change", () => chrome.storage.sync.set({ trendingSort: trendingSortEl.value }));
+
+document.getElementById("btn-browse-trending").addEventListener("click", () => {
+  const topic = topicInputEl.value.trim();
+  if (!topic) { topicInputEl.focus(); return; }
+  const q = new URLSearchParams({
+    topic,
+    topicId: topicNameToId.get(topic) || "",
+    window: trendingWindowEl.value,
+    sort: trendingSortEl.value,
+  });
+  chrome.tabs.create({ url: chrome.runtime.getURL("trending.html") + "?" + q.toString() });
+});
+
+document.getElementById("btn-check-topic-watchlist").addEventListener("click", () => {
+  const btn = document.getElementById("btn-check-topic-watchlist");
+  btn.disabled = true;
+  btn.textContent = "Checking…";
+  chrome.runtime.sendMessage({ action: "checkTopicWatchlistNow" }, () => {
+    btn.disabled = false;
+    btn.textContent = "Check Now";
+    loadTopicWatchlist();
+  });
+});
+
 const STAT_LABELS = {
   total: "Total downloads ever",
   last_7_weeks: "Last 7 weeks",
@@ -547,6 +662,7 @@ loadDownloadStats();
 loadPaperOfTheDay();
 loadWatchlist();
 loadAuthorWatchlist();
+loadTopicWatchlist();
 
 document.getElementById("theme-select").addEventListener("change", (e) => {
   window.setTheme(e.target.value);
