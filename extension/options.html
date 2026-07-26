@@ -426,15 +426,16 @@
     a.btn-secondary:hover { background: var(--surface-2-hover); }
     a.btn-secondary:active { transform: scale(0.98); }
 
-    #export-status {
+    #export-status, #log-export-status {
       font-size: 12px;
       color: var(--text-dim);
     }
 
-    #export-status.ok { color: var(--ok); }
-    #export-status.error { color: var(--err); }
+    #export-status.ok, #log-export-status.ok { color: var(--ok); }
+    #export-status.error, #log-export-status.error { color: var(--err); }
   </style>
   <script src="theme.js"></script>
+  <script src="logger.js"></script>
   <script src="shortcuts.js"></script>
   <script src="vendor/zipwriter.js"></script>
 </head>
@@ -745,6 +746,30 @@
 
       <div class="actions">
         <button id="btn-report-bug" class="secondary">Report a Bug/Feature Request</button>
+      </div>
+    </section>
+
+    <section class="card">
+      <h2>Diagnostics &amp; Logs</h2>
+
+      <div class="field">
+        <div class="hint">
+          Every action you take and every error the extension or native host hits is logged locally — DOIs, what
+          you clicked, and error details, so a bug is diagnosable from one export instead of a description. Nothing
+          is ever sent anywhere automatically; export it yourself and attach it to a
+          <a href="#" id="link-log-to-report">bug report</a> when something goes wrong.
+        </div>
+      </div>
+
+      <div class="field">
+        <label>Export Log</label>
+        <div class="hint" id="log-count-hint">Loading log status…</div>
+      </div>
+
+      <div class="actions">
+        <button id="btn-export-log" class="secondary">Export Log</button>
+        <button id="btn-clear-log" class="secondary">Clear Log</button>
+        <span id="log-export-status"></span>
       </div>
     </section>
 

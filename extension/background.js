@@ -33,6 +33,78 @@ const pendingWatchNotifications = {};
 
 const GRAB_DOI_MENU_ID = "doi-grabber-grab-selection";
 
+// ---------------------------------------------------------------------------
+// Diagnostic logging: every meaningful user action and every error, so a user
+// hitting a bug can export one file instead of us reconstructing what
+// happened from a bug-report description. Stored in chrome.storage.local
+// (not .sync — this is per-machine, can get large, and shouldn't eat the
+// sync quota), as a capped rolling array so it never grows unbounded.
+//
+// Nearly every real action in this extension already funnels through a
+// chrome.runtime.sendMessage({action: ...}) call to this file, so logging at
+// the top of the onMessage listener (below) captures the overwhelming
+// majority of "what did the user do" from a single instrumentation point,
+// rather than needing a doiLog() call hand-added at every button in every
+// page. Pages also get automatic uncaught-error/rejection capture "for free"
+// via extension/logger.js, loaded on every page.
+// ---------------------------------------------------------------------------
+
+const LOG_STORAGE_KEY = "extensionLog";
+const LOG_MAX_ENTRIES = 2000;
+
+// Actions that fire many times per second (native-messaging progress lines
+// relayed to any open popup) — logging every one would drown out everything
+// else and bloat the export for no diagnostic value; the operation they
+// belong to is already logged at start/finish.
+const LOG_EXCLUDED_ACTIONS = new Set(["progress"]);
+
+// Serializes storage.local read-modify-write cycles so two logEvent() calls
+// firing back-to-back (common — e.g. a batch download logs one line per
+// paper) can't race and silently drop one entry.
+let logWriteQueue = Promise.resolve();
+
+function logEvent(level, source, message, data) {
+  const entry = {
+    ts: new Date().toISOString(),
+    level: level || "info",
+    source: source || "unknown",
+    message: String(message || ""),
+    data: data === undefined ? null : data,
+  };
+  logWriteQueue = logWriteQueue
+    .then(
+      () =>
+        new Promise((resolve) => {
+          chrome.storage.local.get({ [LOG_STORAGE_KEY]: [] }, (res) => {
+            const log = res[LOG_STORAGE_KEY];
+            log.push(entry);
+            if (log.length > LOG_MAX_ENTRIES) log.splice(0, log.length - LOG_MAX_ENTRIES);
+            chrome.storage.local.set({ [LOG_STORAGE_KEY]: log }, resolve);
+          });
+        })
+    )
+    // A logging failure should never break the feature that triggered it.
+    .catch(() => {});
+  return logWriteQueue;
+}
+
+// Catches the service worker's own uncaught errors/rejections — the same
+// blind spot extension/logger.js closes on every page, but for background.js
+// itself, which has no page context to load that script into.
+self.addEventListener("error", (e) => {
+  logEvent("error", "background", "Uncaught error: " + e.message, {
+    filename: e.filename,
+    lineno: e.lineno,
+    stack: e.error && e.error.stack,
+  });
+});
+self.addEventListener("unhandledrejection", (e) => {
+  const reason = e.reason;
+  logEvent("error", "background", "Unhandled rejection: " + (reason && reason.message ? reason.message : String(reason)), {
+    stack: reason && reason.stack,
+  });
+});
+
 chrome.runtime.onInstalled.addListener(() => {
   chrome.alarms.create(WATCHLIST_ALARM, { periodInMinutes: WATCHLIST_PERIOD_MINUTES });
   chrome.alarms.create(AUTHOR_WATCHLIST_ALARM, { periodInMinutes: WATCHLIST_PERIOD_MINUTES });
@@ -189,13 +261,16 @@ function checkWatchlist() {
                 title: "New issue available",
                 message: `${entry.journal || "Journal"} — Vol. ${latest.volume}, Issue ${latest.issue}`,
               });
+              logEvent("info", "background", "Journal watchlist: new issue found", { journal: entry.journal, issn: entry.issn, volume: latest.volume, issue: latest.issue });
               entry.volume = latest.volume;
               entry.issue = latest.issue;
               entry.year = latest.year;
               changed = true;
             }
           })
-          .catch(() => {}) // one journal failing shouldn't block the rest
+          // One journal failing shouldn't block the rest, but it should still
+          // be visible in the export instead of vanishing silently.
+          .catch((err) => logEvent("warn", "background", "Journal watchlist check failed for one entry", { journal: entry.journal, issn: entry.issn, error: err.message }))
       );
 
       Promise.all(checks).then(() => {
@@ -363,12 +438,15 @@ function checkTopicWatchlist() {
                 title: fresh.length === 1 ? "New trending paper" : fresh.length + " new trending papers",
                 message: (entry.topic || "Topic") + " — " + fresh[0].title,
               });
+              logEvent("info", "background", "Topic watchlist: new trending paper(s)", { topic: entry.topic, topicId: entry.topicId, count: fresh.length });
               entry.lastNewCount = fresh.length;
             }
             entry.seenDois = topDois; // advance baseline either way
             changed = true;
           })
-          .catch(() => {}); // one topic failing shouldn't block the rest
+          // One topic failing shouldn't block the rest, but it should still
+          // be visible in the export instead of vanishing silently.
+          .catch((err) => logEvent("warn", "background", "Topic watchlist check failed for one entry", { topic: entry.topic, topicId: entry.topicId, error: err.message }));
       });
 
       Promise.all(checks).then(() => {
@@ -414,13 +492,16 @@ function checkAuthorWatchlist() {
                 title: "New work available",
                 message: `${entry.author} — ${latest.title}`,
               });
+              logEvent("info", "background", "Author watchlist: new work found", { author: entry.author, doi: latest.doi });
               entry.doi = latest.doi;
               entry.title = latest.title;
               entry.year = latest.year;
               changed = true;
             }
           })
-          .catch(() => {}) // one author failing shouldn't block the rest
+          // One author failing shouldn't block the rest, but it should still
+          // be visible in the export instead of vanishing silently.
+          .catch((err) => logEvent("warn", "background", "Author watchlist check failed for one entry", { author: entry.author, error: err.message }))
       );
 
       Promise.all(checks).then(() => {
@@ -583,6 +664,7 @@ function runNextCheck() {
     const timeoutId = setTimeout(() => {
       clearBadge(tabId);
       tabState[tabId] = { doi, title, authors, status: "unknown" };
+      logEvent("error", "background", "Availability check timed out client-side", { doi, timeoutMs: CHECK_TIMEOUT_MS });
       try {
         port.disconnect();
       } catch (e) {
@@ -604,12 +686,15 @@ function runNextCheck() {
         clearBadge(tabId);
         tabState[tabId] = { doi, title, authors, status: "unknown" };
       }
+      logEvent(message.status ? "info" : "warn", "background", "Availability check result: " + (message.status || "inconclusive"), { doi, status: message.status, detail: message.detail });
       port.disconnect();
       finish();
     });
 
     port.onDisconnect.addListener(() => {
       // Host crashed or never responded — inconclusive, leave no badge.
+      const err = chrome.runtime.lastError;
+      if (!settled) logEvent("error", "background", "Availability check: native host disconnected before responding", { doi, error: err && err.message });
       finish();
     });
 
@@ -657,15 +742,20 @@ function downloadDOI(doi) {
         const filename = message.filepath ? message.filepath.split("/").pop() : null;
         const sizeInfo = message.size_kb ? ` (${message.size_kb} KB)` : "";
         notifyDownloadResult(true, filename ? `${filename}${sizeInfo}` : "Done");
+        logEvent("info", "background", "downloadDOI succeeded", { doi, status: message.status, filepath: message.filepath, source: message.source });
       } else {
         notifyDownloadResult(false, message.detail || "Unknown error");
+        logEvent("error", "background", "downloadDOI failed", { doi, status: message.status, detail: message.detail });
       }
       port.disconnect();
     });
 
     port.onDisconnect.addListener(() => {
       const err = chrome.runtime.lastError;
-      if (err) notifyDownloadResult(false, err.message);
+      if (err) {
+        notifyDownloadResult(false, err.message);
+        logEvent("error", "background", "downloadDOI native host disconnected with error", { doi, error: err.message });
+      }
     });
 
     port.postMessage({ doi, settings });
@@ -708,6 +798,36 @@ chrome.commands.onCommand.addListener((command) => {
 
 // Listen for messages from the popup and content scripts
 chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
+  // Single instrumentation point for "what did the user do" — nearly every
+  // real action in this extension arrives here as a message, so this alone
+  // covers the large majority of the action log without touching every page.
+  if (request && request.action && !LOG_EXCLUDED_ACTIONS.has(request.action) && request.action !== "logEvent") {
+    const { action: _loggedAction, ...requestData } = request;
+    logEvent("info", "background", "action: " + request.action, {
+      ...requestData,
+      tabUrl: sender.tab && sender.tab.url,
+    });
+  }
+
+  if (request.action === "logEvent") {
+    // A page (via extension/logger.js's doiLog()) forwarding its own
+    // action/error log entry — pages can't write chrome.storage.local-backed
+    // logs reliably themselves (a page can be closed mid-write), so
+    // background.js's service worker owns the actual write.
+    logEvent(request.level, request.source, request.message, request.data);
+    return;
+  }
+
+  if (request.action === "getExtensionLog") {
+    chrome.storage.local.get({ [LOG_STORAGE_KEY]: [] }, (res) => sendResponse(res[LOG_STORAGE_KEY]));
+    return true;
+  }
+
+  if (request.action === "clearExtensionLog") {
+    chrome.storage.local.set({ [LOG_STORAGE_KEY]: [] }, () => sendResponse({ success: true }));
+    return true;
+  }
+
   if (request.action === "doiDetected") {
     const tabId = sender.tab && sender.tab.id;
     if (tabId == null) return;
@@ -1890,6 +2010,9 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
         nativeHostChanged: message.native_host_changed,
         error: message.detail,
       });
+      logEvent(message.status === "ok" ? "info" : "error", "background", "applyUpdate " + (message.status === "ok" ? "succeeded" : "failed"), {
+        status: message.status, output: message.output, nativeHostChanged: message.native_host_changed, detail: message.detail,
+      });
       port.disconnect();
     });
 
@@ -1922,6 +2045,42 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     });
 
     port.postMessage({ action: "export_data" });
+    return true;
+  }
+
+  if (request.action === "getNativeDebugLog") {
+    const port = chrome.runtime.connectNative(NATIVE_HOST);
+
+    port.onMessage.addListener((message) => {
+      if (message.type === "progress") return;
+      sendResponse({ success: message.status === "ok", debugLog: message.debug_log, error: message.detail });
+      port.disconnect();
+    });
+
+    port.onDisconnect.addListener(() => {
+      const err = chrome.runtime.lastError;
+      if (err) sendResponse({ success: false, error: err.message });
+    });
+
+    port.postMessage({ action: "get_debug_log" });
+    return true;
+  }
+
+  if (request.action === "clearNativeDebugLog") {
+    const port = chrome.runtime.connectNative(NATIVE_HOST);
+
+    port.onMessage.addListener((message) => {
+      if (message.type === "progress") return;
+      sendResponse({ success: message.status === "ok", error: message.detail });
+      port.disconnect();
+    });
+
+    port.onDisconnect.addListener(() => {
+      const err = chrome.runtime.lastError;
+      if (err) sendResponse({ success: false, error: err.message });
+    });
+
+    port.postMessage({ action: "clear_debug_log" });
     return true;
   }
 
@@ -2060,6 +2219,9 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
 
         // Final result
         sendResponse({ success: true, result: message });
+        logEvent(message.status === "ok" ? "info" : "error", "background", "sendDOI result: " + (message.status || "unknown"), {
+          doi: request.doi, status: message.status, detail: message.detail, filepath: message.filepath, source: message.source,
+        });
         port.disconnect();
       });
 
@@ -2068,6 +2230,7 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
         if (err) {
           console.error("Native messaging error:", err.message);
           sendResponse({ success: false, error: err.message });
+          logEvent("error", "background", "sendDOI: native host disconnected with error", { doi: request.doi, error: err.message });
         }
       });
 
@@ -2383,6 +2546,8 @@ async function runSnowball(params, port) {
   const cap = Math.max(1, Math.min(200, parseInt(params.cap, 10) || 25));
   const ceiling = Math.max(1, Math.min(2000, parseInt(params.max, 10) || 300));
 
+  logEvent("info", "background", "snowball run started", { seed, dir, maxDepth, cap, ceiling });
+
   const settings = await getSettings();
   const mailto = settings.unpaywallEmail || "";
 
@@ -2450,13 +2615,16 @@ async function runSnowball(params, port) {
     }
   } catch (e) { /* seed keeps a generic label */ }
 
+  const stats = { unique: results.length, merges, perLevel, capped: results.length >= ceiling };
+  logEvent("info", "background", "snowball run finished", { seed, ...stats });
+
   port.postMessage({
     type: "done",
     results,
     edges,
     seedTitle,
     seedAuthor,
-    stats: { unique: results.length, merges, perLevel, capped: results.length >= ceiling },
+    stats,
   });
 }
 
@@ -2471,6 +2639,7 @@ async function runSnowballDownload(dois, port) {
     port.postMessage({ type: "dlprogress", done, failed, total: dois.length });
     await snowballSleep(SNOWBALL_DL_DELAY_MS);
   }
+  logEvent("info", "background", "snowball batch download finished", { done, failed, total: dois.length });
   port.postMessage({ type: "dldone", done, failed, total: dois.length });
 }
 

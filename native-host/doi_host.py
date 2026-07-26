@@ -15,7 +15,8 @@ import struct
 import subprocess
 import threading
 import time
-from datetime import datetime, timedelta
+import traceback
+from datetime import datetime, timedelta, timezone
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 IS_WINDOWS = platform.system() == "Windows"
@@ -128,7 +129,42 @@ DOWNLOAD_LOG_PATH = os.path.join(SCRIPT_DIR, "download_log.txt")
 # Self-update reads/pulls the git repo this host lives in (native-host/ is a
 # subfolder of the repo root, e.g. a clone of github.com/materialcritic/doi-extension).
 REPO_DIR = os.path.dirname(SCRIPT_DIR)
-# ─────────────────────────────────────────────────────────────────────────────
+
+# Diagnostic log for this process — every request this host handles, plus any
+# uncaught exception (which would otherwise just crash silently with nothing
+# useful for a user to report; see the try/except around main() at the bottom
+# of this file). Read back by the extension's "Export Log" feature
+# (background.js's getExtensionLog action bundles this in alongside its own
+# chrome.storage.local-based log) via the get_debug_log action below.
+DEBUG_LOG_PATH = os.path.join(SCRIPT_DIR, "debug_log.txt")
+DEBUG_LOG_MAX_BYTES = 2 * 1024 * 1024  # trim once the file crosses this size
+
+
+def debug_log(line):
+    """Best-effort append to DEBUG_LOG_PATH. Never raises — a logging failure
+    must not be able to break the actual feature that triggered it."""
+    try:
+        # Cheap size check rather than trimming on every call — only pay the
+        # cost of a full read/rewrite once the file has actually grown large.
+        try:
+            oversized = os.path.getsize(DEBUG_LOG_PATH) > DEBUG_LOG_MAX_BYTES
+        except OSError:
+            oversized = False
+        if oversized:
+            with open(DEBUG_LOG_PATH, encoding="utf-8", errors="replace") as f:
+                lines = f.readlines()
+            with open(DEBUG_LOG_PATH, "w", encoding="utf-8") as f:
+                f.writelines(lines[-2000:])
+        # UTC, matching extension_log.txt's timestamps (JS's toISOString() is
+        # always UTC) — a local-time stamp here would silently drift out of
+        # sync with the JS log by the machine's UTC offset, making the two
+        # logs impossible to line up side by side without doing timezone
+        # arithmetic by hand.
+        timestamp = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3] + "Z"
+        with open(DEBUG_LOG_PATH, "a", encoding="utf-8") as f:
+            f.write(f"{timestamp} | {line}\n")
+    except OSError:
+        pass
 
 
 def kill_process_tree(proc):
@@ -243,6 +279,29 @@ def main():
     message = read_message()
     if not message:
         send_message({"type": "result", "status": "error", "detail": "No message received"})
+        return
+
+    action = message.get("action")
+    if action:
+        debug_log(f"request: action={action}" + (f" doi={message['doi']}" if "doi" in message else ""))
+    elif "doi" in message:
+        debug_log(f"request: download doi={message['doi']}")
+
+    if message.get("action") == "get_debug_log":
+        try:
+            with open(DEBUG_LOG_PATH, encoding="utf-8", errors="replace") as f:
+                content = f.read()
+        except FileNotFoundError:
+            content = ""
+        send_message({"type": "result", "status": "ok", "debug_log": content})
+        return
+
+    if message.get("action") == "clear_debug_log":
+        try:
+            open(DEBUG_LOG_PATH, "w").close()
+            send_message({"type": "result", "status": "ok"})
+        except OSError as e:
+            send_message({"type": "result", "status": "error", "detail": str(e)})
         return
 
     if message.get("action") == "mirror_health":
@@ -586,6 +645,17 @@ def main():
     if message.get("action") == "check":
         cmd += ["--check"]
 
+    # Full environment context right next to the actual spawn — the single
+    # most useful line for diagnosing a platform-specific failure (which
+    # interpreter got picked, whether it's the auto-detect or a Settings
+    # override, OS/version), so it's always right there next to whatever
+    # error follows rather than requiring a separate "session start" line.
+    debug_log(
+        f"spawning: doi={doi} platform={platform.system()} {platform.release()} "
+        f"python_bin={python_bin_args} (auto-detected={python_bin == PYTHON_BIN}) "
+        f"script={script_path} cmd_tail={cmd[2:]}"
+    )
+
     try:
         popen_kwargs = {}
         if IS_WINDOWS:
@@ -635,18 +705,34 @@ def main():
 
         if result is not None:
             send_message({"type": "result", **result})
+            debug_log(f"result: doi={doi} status={result.get('status')} detail={result.get('detail', '')}")
         elif proc.returncode == 0:
             send_message({"type": "result", "status": "ok", "detail": "Completed"})
+            debug_log(f"result: doi={doi} status=ok (no RESULT: line, returncode 0)")
         else:
-            send_message({"type": "result", "status": "error", "detail": stderr_output.strip() or "Script exited with an error"})
+            detail = stderr_output.strip() or "Script exited with an error"
+            send_message({"type": "result", "status": "error", "detail": detail})
+            debug_log(f"result: doi={doi} status=error returncode={proc.returncode} detail={detail}")
 
     except subprocess.TimeoutExpired:
         send_message({"type": "result", "status": "error", "detail": "Script timed out"})
+        debug_log(f"result: doi={doi} status=error detail=Script timed out")
     except FileNotFoundError:
         send_message({"type": "result", "status": "error", "detail": f"Script not found: {script_path}"})
+        debug_log(f"result: doi={doi} status=error detail=Script not found: {script_path}")
     except Exception as e:
         send_message({"type": "result", "status": "error", "detail": str(e)})
+        debug_log(f"result: doi={doi} status=error detail={e}\n{traceback.format_exc()}")
 
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except Exception:
+        # Anything raised here previously just crashed the process silently —
+        # Chrome sees the native host disconnect and surfaces a generic error
+        # via lastError, but nothing useful for a bug report survived. Log
+        # the real traceback before letting it propagate (behavior/exit code
+        # unchanged, only the visibility is new).
+        debug_log("FATAL uncaught exception in main():\n" + traceback.format_exc())
+        raise

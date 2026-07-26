@@ -5,6 +5,7 @@
 native-host/papers/
 native-host/download_log.txt
 native-host/mirror_health.json
+native-host/debug_log.txt
 
 # Backup zips exported from the extension's Settings page
 doi-grabber-backup-*.zip

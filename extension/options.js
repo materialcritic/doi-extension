@@ -733,6 +733,110 @@ document.getElementById("btn-report-bug").addEventListener("click", () => {
   chrome.tabs.create({ url: chrome.runtime.getURL("report.html") });
 });
 
+// ---- Diagnostics & Logs ----
+document.getElementById("link-log-to-report").addEventListener("click", (e) => {
+  e.preventDefault();
+  chrome.tabs.create({ url: chrome.runtime.getURL("report.html") });
+});
+
+const logCountHintEl = document.getElementById("log-count-hint");
+const btnExportLog = document.getElementById("btn-export-log");
+const btnClearLog = document.getElementById("btn-clear-log");
+const logExportStatusEl = document.getElementById("log-export-status");
+let logExportStatusClearTimer = null;
+
+function loadLogCount() {
+  chrome.runtime.sendMessage({ action: "getExtensionLog" }, (log) => {
+    if (!Array.isArray(log) || log.length === 0) {
+      logCountHintEl.textContent = "No entries logged yet.";
+      return;
+    }
+    const errors = log.filter((e) => e.level === "error").length;
+    const oldest = new Date(log[0].ts);
+    logCountHintEl.textContent =
+      `${log.length} entries logged (${errors} errors), oldest from ${oldest.toLocaleString()}. ` +
+      "Includes every page's own log plus this Settings page's.";
+  });
+}
+loadLogCount();
+
+function formatLogEntry(e) {
+  const dataStr = e.data ? " " + JSON.stringify(e.data) : "";
+  return `${e.ts} [${(e.level || "info").toUpperCase()}] [${e.source || "unknown"}] ${e.message}${dataStr}`;
+}
+
+btnExportLog.addEventListener("click", async () => {
+  clearTimeout(logExportStatusClearTimer);
+  btnExportLog.disabled = true;
+  logExportStatusEl.className = "";
+  logExportStatusEl.textContent = "Bundling…";
+
+  try {
+    const extLog = await new Promise((resolve) => chrome.runtime.sendMessage({ action: "getExtensionLog" }, resolve));
+    const nativeResp = await new Promise((resolve) => chrome.runtime.sendMessage({ action: "getNativeDebugLog" }, resolve));
+
+    const extLogText = Array.isArray(extLog) && extLog.length
+      ? extLog.map(formatLogEntry).join("\n")
+      : "(no entries)";
+    const nativeLogText = nativeResp && nativeResp.success
+      ? (nativeResp.debugLog || "(no entries)")
+      : "Couldn't reach the native host: " + ((nativeResp && nativeResp.error) || "unknown error");
+
+    const manifest = chrome.runtime.getManifest();
+    const themeInfo = await new Promise((resolve) => chrome.storage.sync.get({ theme: "dark", lightTheme: "parchment" }, resolve));
+    const environment = [
+      `DOI Grabber version: ${manifest.version}`,
+      `Exported: ${new Date().toString()}`,
+      `User agent: ${navigator.userAgent}`,
+      `Platform: ${navigator.platform}`,
+      `Theme: ${themeInfo.theme} (light fallback: ${themeInfo.lightTheme})`,
+    ].join("\n");
+
+    const files = [
+      { name: "extension_log.txt", content: extLogText },
+      { name: "native_host_log.txt", content: nativeLogText },
+      { name: "environment.txt", content: environment },
+    ];
+
+    const zipBytes = ZipWriter.build(files);
+    const blob = new Blob([zipBytes], { type: "application/zip" });
+    const url = URL.createObjectURL(blob);
+    const today = new Date().toISOString().slice(0, 10);
+
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `doi-grabber-log-${today}.zip`;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
+
+    logExportStatusEl.className = "ok";
+    logExportStatusEl.textContent = "Downloaded ✓";
+    logExportStatusClearTimer = setTimeout(() => {
+      logExportStatusEl.textContent = "";
+      logExportStatusEl.className = "";
+    }, 4000);
+  } catch (err) {
+    logExportStatusEl.className = "error";
+    logExportStatusEl.textContent = "Export failed: " + err.message;
+  } finally {
+    btnExportLog.disabled = false;
+  }
+});
+
+btnClearLog.addEventListener("click", () => {
+  if (!confirm("Clear the logged history? This can't be undone — export it first if you might need it.")) return;
+  btnClearLog.disabled = true;
+  Promise.all([
+    new Promise((resolve) => chrome.runtime.sendMessage({ action: "clearExtensionLog" }, resolve)),
+    new Promise((resolve) => chrome.runtime.sendMessage({ action: "clearNativeDebugLog" }, resolve)),
+  ]).then(() => {
+    btnClearLog.disabled = false;
+    loadLogCount();
+  });
+});
+
 const btnImportBackup = document.getElementById("btn-import-backup");
 const importBackupFile = document.getElementById("import-backup-file");
 const importStatusEl = document.getElementById("import-status");
