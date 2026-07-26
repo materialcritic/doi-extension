@@ -14,21 +14,27 @@ const outputDirEl = document.getElementById("output-dir");
 const pythonBinEl = document.getElementById("python-bin");
 const scriptPathEl = document.getElementById("script-path");
 const mirrorsEl = document.getElementById("mirrors");
+const scidbMirrorsEl = document.getElementById("scidb-mirrors");
 const unpaywallEmailEl = document.getElementById("unpaywall-email");
 const savedEl = document.getElementById("saved");
 
 function load() {
-  chrome.storage.sync.get(["outputDir", "pythonBin", "scriptPath", "mirrors", "unpaywallEmail"], (settings) => {
+  chrome.storage.sync.get(["outputDir", "pythonBin", "scriptPath", "mirrors", "scidbMirrors", "unpaywallEmail"], (settings) => {
     outputDirEl.value = settings.outputDir || "";
     pythonBinEl.value = settings.pythonBin || "";
     scriptPathEl.value = settings.scriptPath || "";
     mirrorsEl.value = (settings.mirrors || []).join("\n");
+    scidbMirrorsEl.value = (settings.scidbMirrors || []).join("\n");
     unpaywallEmailEl.value = settings.unpaywallEmail || "";
   });
 }
 
 function save() {
   const mirrors = mirrorsEl.value
+    .split("\n")
+    .map((m) => m.trim())
+    .filter(Boolean);
+  const scidbMirrors = scidbMirrorsEl.value
     .split("\n")
     .map((m) => m.trim())
     .filter(Boolean);
@@ -39,6 +45,7 @@ function save() {
       pythonBin: pythonBinEl.value.trim(),
       scriptPath: scriptPathEl.value.trim(),
       mirrors,
+      scidbMirrors,
       unpaywallEmail: unpaywallEmailEl.value.trim(),
     },
     () => {
@@ -49,7 +56,7 @@ function save() {
 }
 
 function reset() {
-  chrome.storage.sync.remove(["outputDir", "pythonBin", "scriptPath", "mirrors", "unpaywallEmail"], load);
+  chrome.storage.sync.remove(["outputDir", "pythonBin", "scriptPath", "mirrors", "scidbMirrors", "unpaywallEmail"], load);
 }
 
 document.getElementById("btn-save").addEventListener("click", save);
@@ -861,158 +868,46 @@ if (location.hash === "#updates") {
 
 checkForUpdate();
 
-// Citation snowballing controls on the Settings page.
+// Citation snowballing controls on the Settings page. The actual run (port
+// connection, progress, results, download/copy/graph) now happens in its own
+// tab (snowball.html/snowball.js) — this card just collects the parameters
+// and hands them off via chrome.storage.local, the same handoff pattern
+// options.js already uses to open graph.html with a completed run's data.
 (function () {
   const $ = (id) => document.getElementById(id);
   const runBtn = $("snowball-run");
   if (!runBtn) return;
 
   const setStatus = (t) => { const p = $("snowball-progress"); if (p) p.textContent = t; };
-  const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
-
-  let lastEdges = [];
-  let lastSeedTitle = "";
-  let lastSeedAuthor = "";
-  let activePort = null; // the in-flight "run" port, if any — lets Reset cancel it cleanly
 
   runBtn.addEventListener("click", () => {
     const doi = ($("snowball-doi").value || "").trim();
     if (!doi) { setStatus("Enter a DOI to start."); return; }
-    $("snowball-results").innerHTML = "";
-    runBtn.disabled = true;
-    setStatus("Starting…");
+    setStatus("");
 
-    const port = chrome.runtime.connect({ name: "snowball" });
-    activePort = port;
-    port.onMessage.addListener((msg) => {
-      if (msg.type === "progress") {
-        setStatus("Expanding hop " + msg.depth + " · " + msg.found + " papers found (checked " + msg.processed + ")");
-      } else if (msg.type === "done") {
-        runBtn.disabled = false;
-        lastEdges = msg.edges || [];
-        lastSeedTitle = msg.seedTitle || "";
-        lastSeedAuthor = msg.seedAuthor || "";
-        renderResults(msg.results, msg.stats);
-        port.disconnect();
-      } else if (msg.type === "error") {
-        runBtn.disabled = false;
-        setStatus(msg.message);
-        port.disconnect();
-      }
-    });
-    port.onDisconnect.addListener(() => { runBtn.disabled = false; if (activePort === port) activePort = null; });
-    port.postMessage({
-      cmd: "run",
-      doi,
-      dir: $("snowball-dir").value,
-      depth: parseInt($("snowball-depth").value, 10),
-      cap: parseInt($("snowball-cap").value, 10),
-      max: parseInt($("snowball-max").value, 10),
+    chrome.storage.local.set({
+      snowballRunParams: {
+        doi,
+        dir: $("snowball-dir").value,
+        depth: parseInt($("snowball-depth").value, 10),
+        cap: parseInt($("snowball-cap").value, 10),
+        max: parseInt($("snowball-max").value, 10),
+      },
+    }, () => {
+      chrome.tabs.create({ url: chrome.runtime.getURL("snowball.html") });
     });
   });
 
   const resetBtn = $("snowball-reset");
   if (resetBtn) {
     resetBtn.addEventListener("click", () => {
-      // Cancel an in-flight run rather than leaving it to finish and clobber
-      // the just-cleared results — background.js's service worker keeps
-      // running the walk until the port disconnects, so this actually stops it.
-      if (activePort) {
-        try { activePort.disconnect(); } catch (e) { /* already gone */ }
-        activePort = null;
-      }
-      runBtn.disabled = false;
       $("snowball-doi").value = "";
       $("snowball-dir").value = "both";
       $("snowball-depth").value = "2";
       $("snowball-cap").value = "25";
       $("snowball-max").value = "300";
-      $("snowball-results").innerHTML = "";
-      lastEdges = [];
-      lastSeedTitle = "";
-      lastSeedAuthor = "";
       setStatus("");
       $("snowball-doi").focus();
     });
-  }
-
-  function renderResults(results, stats) {
-    const dois = results.map((r) => r.doi);
-    setStatus(
-      stats.unique + " unique papers · " + stats.merges + " duplicates merged" +
-      (stats.capped ? " · hit the max-papers limit" : "")
-    );
-    const wrap = $("snowball-results");
-    wrap.innerHTML = "";
-
-    const bar = document.createElement("div");
-    bar.className = "actions";
-
-    const dl = document.createElement("button");
-    dl.textContent = "Download all (" + dois.length + ")";
-    dl.className = "secondary";
-    dl.addEventListener("click", () => startDownload(dois));
-
-    const cp = document.createElement("button");
-    cp.textContent = "Copy DOIs";
-    cp.className = "secondary";
-    cp.addEventListener("click", () => {
-      navigator.clipboard.writeText(dois.join("\n")).then(() => setStatus("Copied " + dois.length + " DOIs to the clipboard."));
-    });
-
-    const gv = document.createElement("button");
-    gv.textContent = "View as graph";
-    gv.className = "secondary";
-    gv.addEventListener("click", () => {
-      chrome.storage.local.set({
-        snowballGraph: {
-          seed: { doi: ($("snowball-doi").value || "").trim(), title: lastSeedTitle, author: lastSeedAuthor },
-          nodes: results,
-          edges: lastEdges,
-        },
-      }, () => {
-        chrome.tabs.create({ url: chrome.runtime.getURL("graph.html") });
-      });
-    });
-
-    bar.appendChild(dl);
-    bar.appendChild(cp);
-    bar.appendChild(gv);
-    wrap.appendChild(bar);
-
-    const list = document.createElement("div");
-    list.className = "list";
-    results.forEach((r) => {
-      const row = document.createElement("div");
-      row.className = "row";
-      const left = document.createElement("div");
-      left.className = "row-title";
-      left.innerHTML = '<span class="row-tag">[' + r.via + " · hop " + r.depth + "]</span> " + (r.title ? esc(r.title) : r.doi);
-      const a = document.createElement("a");
-      a.href = "https://doi.org/" + r.doi;
-      a.textContent = r.doi;
-      a.target = "_blank";
-      a.rel = "noopener";
-      a.className = "row-link";
-      row.appendChild(left);
-      row.appendChild(a);
-      list.appendChild(row);
-    });
-    wrap.appendChild(list);
-  }
-
-  function startDownload(dois) {
-    if (!dois.length) return;
-    setStatus("Starting download of " + dois.length + " papers…");
-    const port = chrome.runtime.connect({ name: "snowball" });
-    port.onMessage.addListener((msg) => {
-      if (msg.type === "dlprogress") {
-        setStatus("Downloading " + msg.done + "/" + msg.total + (msg.failed ? " · " + msg.failed + " failed" : ""));
-      } else if (msg.type === "dldone") {
-        setStatus("Done — downloaded " + msg.done + "/" + msg.total + (msg.failed ? " · " + msg.failed + " failed" : ""));
-        port.disconnect();
-      }
-    });
-    port.postMessage({ cmd: "download", dois });
   }
 })();

@@ -166,12 +166,14 @@ class SciHubDownloader:
         'https://annas-archive.li',
     ]
 
-    def __init__(self, output_dir='papers', verbose=False, mirrors=None, unpaywall_email=None):
+    def __init__(self, output_dir='papers', verbose=False, mirrors=None, unpaywall_email=None, scidb_mirrors=None):
         self.output_dir = Path(output_dir)
         self.output_dir.mkdir(parents=True, exist_ok=True)
         self.verbose = verbose
         if mirrors:
             self.SCIHUB_URLS = mirrors
+        if scidb_mirrors:
+            self.SCIDB_MIRRORS = scidb_mirrors
         self.unpaywall_email = unpaywall_email or UNPAYWALL_EMAIL
         self._captcha_hits = 0
         self.session = requests.Session()
@@ -494,30 +496,69 @@ class SciHubDownloader:
         in _extract_scidb_candidates() are the thing to update first.
         """
         doi = self.extract_doi(doi)
-        for base_url in self.SCIDB_MIRRORS:
-            try:
-                page_url = f"{base_url}/scidb/{quote(doi)}"
-                print(f"Trying Anna's Archive (SciDB): {base_url}...", flush=True)
-                self.log(f"Requesting SciDB page: {page_url}")
-                resp = self.session.get(page_url, timeout=20, allow_redirects=True)
-                if resp.status_code != 200:
-                    self.log(f"SciDB status {resp.status_code} on {base_url}")
-                    continue
+        health = load_mirror_health()
+        try:
+            for base_url in self.SCIDB_MIRRORS:
+                start = time.time()
+                try:
+                    page_url = f"{base_url}/scidb/{quote(doi)}"
+                    print(f"Trying Anna's Archive (SciDB): {base_url}...", flush=True)
+                    self.log(f"Requesting SciDB page: {page_url}")
+                    resp = self.session.get(page_url, timeout=20, allow_redirects=True)
+                    elapsed_ms = round((time.time() - start) * 1000)
+                    if resp.status_code != 200:
+                        self.log(f"SciDB status {resp.status_code} on {base_url}")
+                        self._record_scidb_health(health, base_url, elapsed_ms, success=False)
+                        continue
 
-                candidates = self._extract_scidb_candidates(resp, base_url)
-                for cand in candidates:
-                    self.log(f"SciDB candidate: {cand}")
-                    if self._scidb_candidate_is_pdf(cand, referer=page_url):
-                        self.log(f"SciDB validated PDF: {cand}")
-                        return cand
-                self.log(f"No valid PDF found via {base_url}")
-            except requests.RequestException as e:
-                self.log(f"SciDB request failed on {base_url}: {e}")
-                continue
-            except Exception as e:
-                self.log(f"SciDB error on {base_url}: {e}")
-                continue
-        return None
+                    candidates = self._extract_scidb_candidates(resp, base_url)
+                    found = None
+                    for cand in candidates:
+                        self.log(f"SciDB candidate: {cand}")
+                        if self._scidb_candidate_is_pdf(cand, referer=page_url):
+                            self.log(f"SciDB validated PDF: {cand}")
+                            found = cand
+                            break
+                    self._record_scidb_health(health, base_url, elapsed_ms, success=bool(found))
+                    if found:
+                        return found
+                    self.log(f"No valid PDF found via {base_url}")
+                except requests.RequestException as e:
+                    elapsed_ms = round((time.time() - start) * 1000)
+                    self.log(f"SciDB request failed on {base_url}: {e}")
+                    self._record_scidb_health(health, base_url, elapsed_ms, success=False)
+                    continue
+                except Exception as e:
+                    elapsed_ms = round((time.time() - start) * 1000)
+                    self.log(f"SciDB error on {base_url}: {e}")
+                    self._record_scidb_health(health, base_url, elapsed_ms, success=False)
+                    continue
+            return None
+        finally:
+            save_mirror_health(health)
+
+    def _record_scidb_health(self, health, mirror, elapsed_ms, success):
+        """Tracks Anna's Archive (SciDB) mirrors in the same mirror_health.json
+        file/schema already used for Sci-Hub mirrors (fail_count/last_failed/
+        last_latency_ms/latency_history/last_seen) -- Settings' Mirror Health
+        panel and doi_host.py's mirror_health action just list whatever URLs
+        are in the file, with no Sci-Hub-specific assumption, so this is all
+        that's needed for SciDB mirrors to show up there too. Deliberately
+        skips latency_by_hour/is_mirror_unhealthy-style cooldown skipping --
+        those exist for Sci-Hub's parallel mirror race (item 70's time-of-day
+        seeding); this tier is a plain sequential fallback, not raced."""
+        entry = health.setdefault(mirror, {'fail_count': 0, 'last_failed': None})
+        entry['last_latency_ms'] = elapsed_ms
+        entry['last_seen'] = datetime.now().isoformat()
+        history = entry.setdefault('latency_history', [])
+        history.append(elapsed_ms)
+        del history[:-20]
+        if success:
+            entry['fail_count'] = 0
+            entry['last_failed'] = None
+        else:
+            entry['fail_count'] = entry.get('fail_count', 0) + 1
+            entry['last_failed'] = datetime.now().isoformat()
 
     def _extract_scidb_candidates(self, response, base_url):
         """Pull possible direct-PDF URLs out of a SciDB page, best guess first.
@@ -732,6 +773,10 @@ def main():
         help='Comma-separated list of Sci-Hub mirror URLs to use instead of the default list'
     )
     parser.add_argument(
+        '--scidb-mirrors',
+        help="Comma-separated list of Anna's Archive (SciDB) mirror URLs to use instead of the default list"
+    )
+    parser.add_argument(
         '--check',
         action='store_true',
         help='Only check whether a PDF is available, without downloading it'
@@ -744,7 +789,8 @@ def main():
     args = parser.parse_args()
 
     mirrors = [m.strip() for m in args.mirrors.split(',') if m.strip()] if args.mirrors else None
-    downloader = SciHubDownloader(output_dir=args.directory, verbose=args.verbose, mirrors=mirrors, unpaywall_email=args.email)
+    scidb_mirrors = [m.strip() for m in args.scidb_mirrors.split(',') if m.strip()] if args.scidb_mirrors else None
+    downloader = SciHubDownloader(output_dir=args.directory, verbose=args.verbose, mirrors=mirrors, unpaywall_email=args.email, scidb_mirrors=scidb_mirrors)
 
     if args.check:
         pdf_url = downloader.get_pdf_url(args.identifier)

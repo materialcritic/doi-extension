@@ -185,7 +185,7 @@
       margin-top: 6px;
     }
 
-    input[type="text"], input[type="email"], textarea, select {
+    input[type="text"], input[type="email"], input[type="number"], textarea, select {
       width: 100%;
       background: var(--surface-2);
       border: 1px solid var(--border);
@@ -261,44 +261,6 @@
     }
 
     .snowball-grid .field { margin-bottom: 0; }
-
-    #snowball-results .row {
-      display: flex;
-      justify-content: space-between;
-      gap: 12px;
-      padding: 8px 10px;
-      font-size: 12.5px;
-      border-bottom: 1px solid var(--border);
-    }
-
-    #snowball-results .row:last-child { border-bottom: none; }
-
-    #snowball-results .row-title {
-      min-width: 0;
-      overflow: hidden;
-      text-overflow: ellipsis;
-      white-space: nowrap;
-      color: var(--text);
-    }
-
-    #snowball-results .row-tag {
-      opacity: 0.55;
-    }
-
-    #snowball-results .row-link {
-      opacity: 0.7;
-      white-space: nowrap;
-      flex: 0 0 auto;
-      color: var(--text);
-    }
-
-    #snowball-results .list {
-      max-height: 280px;
-      overflow: auto;
-      border: 1px solid var(--border);
-      border-radius: 8px;
-      margin-top: 4px;
-    }
 
     .row {
       display: flex;
@@ -534,6 +496,12 @@
         <label for="mirrors">Sci-Hub mirrors (one per line)</label>
         <textarea id="mirrors" placeholder="https://sci-hub.se&#10;https://sci-hub.st"></textarea>
         <div class="hint">Leave blank to use the script's built-in mirror list.</div>
+      </div>
+
+      <div class="field">
+        <label for="scidb-mirrors">Anna's Archive (SciDB) mirrors (one per line)</label>
+        <textarea id="scidb-mirrors" placeholder="https://annas-archive.gd&#10;https://annas-archive.pk"></textarea>
+        <div class="hint">Last-resort fallback tried after Sci-Hub, Unpaywall, and the publisher page. Leave blank to use the script's built-in mirror list.</div>
       </div>
 
       <div class="field">
@@ -785,7 +753,7 @@
 
       <div class="hint">
         Forward expansion grows fast — at depth 2+ the max-papers limit is what stops it. Large runs can take a
-        minute; progress shows below.
+        minute; clicking "Run snowball" opens a new tab with live progress and results.
       </div>
 
       <div class="actions">
@@ -793,7 +761,6 @@
         <button id="snowball-reset" class="secondary">Reset</button>
       </div>
       <div id="snowball-progress" class="hint" style="margin-top: 10px"></div>
-      <div id="snowball-results"></div>
     </section>
   </div>
 

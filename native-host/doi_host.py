@@ -564,6 +564,7 @@ def main():
     script_path = settings.get("scriptPath") or YOUR_SCRIPT
     output_dir = settings.get("outputDir")
     mirrors = settings.get("mirrors")
+    scidb_mirrors = settings.get("scidbMirrors")
     unpaywall_email = settings.get("unpaywallEmail")
 
     # find_python_with_requests() always resolves to a single concrete
@@ -578,6 +579,8 @@ def main():
         cmd += ["-d", output_dir]
     if mirrors:
         cmd += ["-m", ",".join(mirrors)]
+    if scidb_mirrors:
+        cmd += ["--scidb-mirrors", ",".join(scidb_mirrors)]
     if unpaywall_email:
         cmd += ["--email", unpaywall_email]
     if message.get("action") == "check":
