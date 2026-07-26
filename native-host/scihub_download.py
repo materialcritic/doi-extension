@@ -153,7 +153,19 @@ class SciHubDownloader:
         'https://sci-hub.red',
         'https://sci-hub.su',
     ]
-    
+
+    # Anna's Archive / SciDB mirror domains, tried in order. These rotate under
+    # legal pressure, so keep this list current. The user-supplied .pk domain is
+    # first, with longer-lived ones as fallbacks. SciDB is the *last* source tried
+    # (after Sci-Hub, Unpaywall, and the publisher page), so a slow or dead domain
+    # here only ever delays the final "not available" answer.
+    SCIDB_MIRRORS = [
+        'https://annas-archive.gd',
+        'https://annas-archive.pk',
+        'https://annas-archive.gl',
+        'https://annas-archive.li',
+    ]
+
     def __init__(self, output_dir='papers', verbose=False, mirrors=None, unpaywall_email=None):
         self.output_dir = Path(output_dir)
         self.output_dir.mkdir(parents=True, exist_ok=True)
@@ -463,6 +475,116 @@ class SciHubDownloader:
             self.log(f"Publisher page fetch failed: {e}")
             return None
 
+    def get_scidb_pdf_url(self, doi):
+        """Final fallback: resolve a DOI to a PDF via Anna's Archive (SciDB).
+
+        Tried only after Sci-Hub, Unpaywall, and the publisher page have all come
+        up empty. Returns a directly-downloadable PDF URL, or None.
+
+        Like the Unpaywall resolver, this validates that the candidate is a real
+        PDF *before* returning it, so a SciDB viewer/landing page is never handed
+        back to download_pdf() and misreported as "Corrupt" -- a miss here should
+        fall through cleanly to the final "not available" result.
+
+        NOTE: SciDB's page markup and download URLs change fairly often, and some
+        Anna's Archive domains sit behind a Cloudflare bot-challenge that blocks
+        plain server-side fetches (the same wall this tool already hits on
+        tandfonline etc.). When that happens, every candidate simply fails
+        validation and this returns None. If SciDB stops resolving, the selectors
+        in _extract_scidb_candidates() are the thing to update first.
+        """
+        doi = self.extract_doi(doi)
+        for base_url in self.SCIDB_MIRRORS:
+            try:
+                page_url = f"{base_url}/scidb/{quote(doi)}"
+                print(f"Trying Anna's Archive (SciDB): {base_url}...", flush=True)
+                self.log(f"Requesting SciDB page: {page_url}")
+                resp = self.session.get(page_url, timeout=20, allow_redirects=True)
+                if resp.status_code != 200:
+                    self.log(f"SciDB status {resp.status_code} on {base_url}")
+                    continue
+
+                candidates = self._extract_scidb_candidates(resp, base_url)
+                for cand in candidates:
+                    self.log(f"SciDB candidate: {cand}")
+                    if self._scidb_candidate_is_pdf(cand, referer=page_url):
+                        self.log(f"SciDB validated PDF: {cand}")
+                        return cand
+                self.log(f"No valid PDF found via {base_url}")
+            except requests.RequestException as e:
+                self.log(f"SciDB request failed on {base_url}: {e}")
+                continue
+            except Exception as e:
+                self.log(f"SciDB error on {base_url}: {e}")
+                continue
+        return None
+
+    def _extract_scidb_candidates(self, response, base_url):
+        """Pull possible direct-PDF URLs out of a SciDB page, best guess first.
+
+        Deliberately broad and ordered most- to least-specific, mirroring the
+        multi-method approach in _try_mirror(). Every candidate is validated by
+        the caller before use, so over-collecting here is cheap."""
+        soup = BeautifulSoup(response.content, 'html.parser')
+        candidates = []
+
+        def add(url):
+            if not url:
+                return
+            full = self._normalize_url(url, response.url or base_url)
+            if full and full not in candidates:
+                candidates.append(full)
+
+        # 1. Embedded viewer iframe pointing at the file (common SciDB layout)
+        for iframe in soup.find_all('iframe', src=True):
+            src = iframe['src']
+            low = src.lower()
+            if '.pdf' in low or '/scidb/' in low or 'download' in low:
+                add(src)
+
+        # 2. <embed>/<object> PDF viewers
+        for tag in soup.find_all(['embed', 'object']):
+            src = tag.get('src') or tag.get('data')
+            if src and ('.pdf' in src.lower() or 'download' in src.lower()):
+                add(src)
+
+        # 3. Explicit download / .pdf anchor links
+        for a in soup.find_all('a', href=True):
+            href = a['href']
+            low = href.lower()
+            if '.pdf' in low or 'download' in low or '/scidb/' in low:
+                add(href)
+
+        # 4. Bare PDF URLs anywhere in the page source
+        for m in re.findall(r'https?://[^\s\'"<>]+\.pdf[^\s\'"<>]*', response.text):
+            add(m)
+
+        return candidates
+
+    def _scidb_candidate_is_pdf(self, url, referer=None):
+        """Fetch just enough of `url` to confirm it's a real PDF (Content-Type
+        says so, or the bytes start with the %PDF- magic number), so a viewer or
+        HTML page is never returned as a downloadable file. Returns True/False."""
+        headers = {'Referer': referer} if referer else {}
+        try:
+            r = self.session.get(url, headers=headers, timeout=20,
+                                 stream=True, allow_redirects=True)
+            if r.status_code != 200:
+                r.close()
+                return False
+            ctype = r.headers.get('content-type', '').lower()
+            if 'pdf' in ctype or 'octet-stream' in ctype:
+                r.close()
+                return True
+            if 'html' in ctype or 'text' in ctype:
+                r.close()
+                return False
+            first = next(r.iter_content(chunk_size=5), b'')
+            r.close()
+            return first[:5] == b'%PDF-'
+        except requests.RequestException:
+            return False
+
     def _normalize_url(self, url, base_url):
         """Normalize PDF URL to absolute URL"""
         if url.startswith('http'):
@@ -497,8 +619,14 @@ class SciHubDownloader:
                 print("Not on Unpaywall — checking the publisher page directly...", flush=True)
                 pdf_url = self.get_oa_pdf_url_publisher(doi)
 
+            if not pdf_url:
+                print("Not open-access anywhere — trying Anna's Archive (SciDB) as a last resort...", flush=True)
+                pdf_url = self.get_scidb_pdf_url(doi)
+                if pdf_url:
+                    source = 'scidb'
+
         if not pdf_url:
-            print("\n❌ Could not find paper on Sci-Hub or as an open-access copy.", flush=True)
+            print("\n❌ Could not find paper on Sci-Hub, as an open-access copy, or on Anna's Archive.", flush=True)
             print("\nPossible reasons:", flush=True)
             print("  • The paper might not be in Sci-Hub's database", flush=True)
             print("  • It isn't openly available anywhere Unpaywall or the publisher page expose", flush=True)
@@ -508,8 +636,8 @@ class SciHubDownloader:
             print("  • Using a VPN", flush=True)
             print("  • Checking the DOI is correct", flush=True)
             print("  • Trying again later", flush=True)
-            self.log_download(identifier, "FAILED", error="No PDF found on Sci-Hub or as an open-access copy")
-            self.emit_result("error", detail="No PDF found on Sci-Hub or as an open-access copy")
+            self.log_download(identifier, "FAILED", error="No PDF found on Sci-Hub, open-access, or Anna's Archive")
+            self.emit_result("error", detail="No PDF found on Sci-Hub, open-access, or Anna's Archive")
             return False
 
         print(f"Found PDF at: {pdf_url}" + (" (open access)" if source == 'open_access' else ""), flush=True)
