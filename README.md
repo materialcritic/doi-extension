@@ -29,6 +29,7 @@ This is a **personal, single-machine tool** — it is not published on the Chrom
   - [Download Entire Journal](#download-entire-journal)
   - [Similar Papers](#similar-papers)
   - [Author Network Map](#author-network-map)
+  - [Citation Snowball Graph](#citation-snowball-graph)
 - [Settings page](#settings-page)
 - [Keeping it up to date](#keeping-it-up-to-date)
 - [Reporting a bug or requesting a feature](#reporting-a-bug-or-requesting-a-feature)
@@ -347,6 +348,18 @@ Opened via Settings → **Tools** → **Open Author Network Map** (its own tab, 
 
 Same name-based-matching caveat as the rest of the extension's author tools — Crossref/OpenAlex name search can conflate two different real people who share a name, especially common ones.
 
+### Citation Snowball Graph
+
+Reached from Settings → **Citation Snowballing** (not the popup). Give it a seed DOI and it does a breadth-first "snowball" walk of the citation graph:
+
+- **Direction** — Backward walks the seed's own references (via Crossref), Forward walks papers that cite it (via OpenAlex, top-k by citation count), Both does both.
+- **Depth** — up to 4 hops out from the seed.
+- **Per-level cap** and **Max papers** — bound fan-out per node and the total walk size; forward citations explode fast, so the max-papers ceiling is what actually stops a deep forward run.
+- Every paper is deduped by DOI across the *whole* graph, not just per-level — a paper reached by several paths is only fetched once, and the results summary reports how many such convergences ("duplicates merged") happened.
+- Results list each paper's title, author, hop, and direction, with **Download all**, **Copy DOIs**, and **View as graph** buttons. **Reset** clears the form (and cancels an in-progress run) so a new seed DOI can be run without reloading the page.
+
+**View as graph** opens a dedicated tab (`graph.html`) rendering the walk as a pannable, zoomable node graph: the seed centered, references fanning left (teal), citations fanning right (coral), edges drawn between them including the convergence edges dedup would otherwise hide. Each node shows the paper's title and author (backward/Crossref nodes that come back title-less are batch-enriched from OpenAlex afterward); hovering a node shows the full title/author plus its abstract, lazily fetched and cached per DOI the moment you hover it — nothing is fetched for papers you never look at. Clicking a node (a real click, not a drag) opens that paper's `doi.org` page in a new tab. The graph has its own **Direction**/**Depth** filter bar that narrows what's currently drawn — this filters the graph already sitting in memory, it never re-runs the walk — and follows the extension's active color theme like every other page.
+
 ## Settings page
 
 Right-click the toolbar icon → **Options** (or click ⚙ in the popup):
@@ -366,6 +379,7 @@ Right-click the toolbar icon → **Options** (or click ⚙ in the popup):
   - **Import Backup** — restores settings, watchlists, download history, and mirror health from a zip created by Export Everything. Overwrites your current state, so use with care.
   - **Report a Bug/Feature Request** — see below
 - **Citation Export** — builds a BibTeX or RIS file covering every paper you've successfully downloaded, with metadata fetched fresh from Crossref per paper (title/author/journal/year), for importing into Zotero, Mendeley, or another reference manager. Can take a while for a large library, since it's one lookup per paper.
+- **Citation Snowballing** — walk a seed paper's references and/or citations out several hops and browse the result as an interactive graph; see [Citation Snowball Graph](#citation-snowball-graph)
 
 ## Keeping it up to date
 
@@ -404,6 +418,7 @@ doi-extension/
 │   ├── journal-download.html/.js  # "Download Entire Journal" page
 │   ├── search.html / search.js    # "Similar Papers" results page
 │   ├── network.html / network.js  # "Author Network Map" page
+│   ├── graph.html / graph.js      # "Citation Snowball Graph" page (opened from Settings)
 │   ├── report.html / report.js    # Bug/feature report form
 │   ├── theme.js                   # Shared 6-palette color theme system
 │   ├── shortcuts.js                # Shared popup-shortcut definitions
