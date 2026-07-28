@@ -55,9 +55,6 @@ const sourceTitle = params.get("sourceTitle") || "";
 searchTitleEl.textContent = sourceTitle ? `Similar to: ${sourceTitle}` : "Similar Papers";
 keywordLineEl.textContent = query ? `Searched Crossref for: ${query}` : "";
 
-function sanitizeFolderName(name) {
-  return name.replace(/[^\w\-. ]/g, "").trim().replace(/\s+/g, " ") || "similar-papers";
-}
 
 function getSettings() {
   return new Promise((resolve) => {
@@ -96,9 +93,9 @@ async function resolveOutputPaths() {
   const settings = await getSettings();
   let baseDir = (settings.outputDir || "").replace(/\/+$/, "");
   if (!baseDir) baseDir = (await getDefaultOutputDir()).replace(/\/+$/, "");
-  const folderName = sanitizeFolderName(`Similar Papers - ${sourceTitle || query}`);
-  outputDirOverride = `${baseDir}/${folderName}`;
-  logPath = `${outputDirOverride}/download_log.txt`;
+  const folderName = sanitizeFolderName(`Similar Papers - ${sourceTitle || query}`, "similar-papers");
+  outputDirOverride = joinOutputPath(baseDir, folderName);
+  logPath = joinOutputPath(outputDirOverride, "download_log.txt");
 }
 
 // Parses this search's own download_log.txt (written by this page) to find

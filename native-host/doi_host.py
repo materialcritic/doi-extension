@@ -140,6 +140,52 @@ DEBUG_LOG_PATH = os.path.join(SCRIPT_DIR, "debug_log.txt")
 DEBUG_LOG_MAX_BYTES = 2 * 1024 * 1024  # trim once the file crosses this size
 
 
+class _FileLock:
+    """Cross-process advisory lock. Every doi_host.py invocation is a
+    separate OS process (main() handles exactly one request then exits), so
+    a plain in-process threading.Lock does nothing to stop two of those
+    processes from interleaving mid-write if they land close together (e.g.
+    Settings' page-load fan-out opens several native-messaging connections
+    back to back). Degrades to a no-op if locking is unavailable rather than
+    failing the write — logging must never become the reason a request fails."""
+
+    def __init__(self, handle):
+        self.handle = handle
+
+    def __enter__(self):
+        try:
+            if IS_WINDOWS:
+                import msvcrt
+                msvcrt.locking(self.handle.fileno(), msvcrt.LK_LOCK, 1)
+            else:
+                import fcntl
+                fcntl.flock(self.handle.fileno(), fcntl.LOCK_EX)
+        except (ImportError, OSError):
+            pass
+        return self
+
+    def __exit__(self, *exc):
+        try:
+            if IS_WINDOWS:
+                import msvcrt
+                msvcrt.locking(self.handle.fileno(), msvcrt.LK_UNLCK, 1)
+            else:
+                import fcntl
+                fcntl.flock(self.handle.fileno(), fcntl.LOCK_UN)
+        except (ImportError, OSError):
+            pass
+        return False
+
+
+def _redact_debug_log_path(text):
+    """Mask the OS account name in a path so this log is safe to attach to
+    a bug report — mirrors extension/redact.js's redactPath() on the JS side."""
+    import re
+    text = re.sub(r"([A-Za-z]:[\\/]Users[\\/])[^\\/\s]+", r"\1<user>", text)
+    text = re.sub(r"(/(?:home|Users)/)[^/\s]+", r"\1<user>", text)
+    return text
+
+
 def debug_log(line):
     """Best-effort append to DEBUG_LOG_PATH. Never raises — a logging failure
     must not be able to break the actual feature that triggered it."""
@@ -161,8 +207,25 @@ def debug_log(line):
         # logs impossible to line up side by side without doing timezone
         # arithmetic by hand.
         timestamp = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3] + "Z"
-        with open(DEBUG_LOG_PATH, "a", encoding="utf-8") as f:
-            f.write(f"{timestamp} | {line}\n")
+        # The newline is part of this SAME string, written in ONE write()
+        # call — two records that land in the same append window can still
+        # never end up with one swallowing the other's newline, which is
+        # exactly how "action=recent_downloads" and the next record's
+        # timestamp once got fused into one unparseable line (confirmed live
+        # from a real Windows export: multiple doi_host.py processes appending
+        # around the same moment, each seeking to EOF and writing without a
+        # lock). newline="" additionally stops Windows from translating \n to
+        # \r\n, which would otherwise make byte offsets and any future line-
+        # count-based logic disagree with what's actually on disk.
+        record = f"{timestamp} | {_redact_debug_log_path(str(line))}\n"
+        with open(DEBUG_LOG_PATH, "a", encoding="utf-8", newline="") as f:
+            with _FileLock(f):
+                f.write(record)
+                f.flush()
+                try:
+                    os.fsync(f.fileno())
+                except OSError:
+                    pass  # some filesystems/mounts don't support fsync; the write itself already landed
     except OSError:
         pass
 

@@ -1,3 +1,9 @@
+// Sanitizes log entries before they're persisted — see redact.js. Not a
+// module (manifest declares a classic "service_worker"), so importScripts()
+// is the correct way to pull in a shared file here, same as a content
+// script's manifest-ordered js array would.
+importScripts("redact.js");
+
 const NATIVE_HOST = "com.doi_grabber.host";
 
 // Tracks the DOI last checked per tab, so we don't re-run the check
@@ -58,34 +64,131 @@ const LOG_MAX_ENTRIES = 2000;
 // belong to is already logged at start/finish.
 const LOG_EXCLUDED_ACTIONS = new Set(["progress"]);
 
-// Serializes storage.local read-modify-write cycles so two logEvent() calls
-// firing back-to-back (common — e.g. a batch download logs one line per
-// paper) can't race and silently drop one entry.
-let logWriteQueue = Promise.resolve();
+// Coalesces logEvent() calls made within the same synchronous burst (e.g.
+// Settings' page-load fan-out logs 6 actions back-to-back; a batch download
+// logs one line per paper) into a single storage.local read-modify-write,
+// rather than one write per call — chrome.storage.local caps writes at 120/
+// minute, and a real burst pattern like that fan-out can otherwise chew
+// through a meaningful fraction of the quota for zero benefit. Deliberately
+// a short (not ~1s) debounce: this is diagnostic logging, so the entry
+// right before a crash is exactly the one that matters most — a long window
+// risks losing it if the service worker is torn down before it flushes.
+const LOG_FLUSH_DEBOUNCE_MS = 50;
+let logPendingEntries = [];
+let logFlushTimer = null;
 
 function logEvent(level, source, message, data) {
+  const rawData = data === undefined ? null : data;
   const entry = {
     ts: new Date().toISOString(),
     level: level || "info",
     source: source || "unknown",
     message: String(message || ""),
-    data: data === undefined ? null : data,
+    // Strip secrets (page URLs' query/fragment, the OS account name in file
+    // paths) before this ever touches storage — see redact.js. Guarded in
+    // case importScripts("redact.js") somehow didn't run; logging must
+    // never throw into whatever triggered it.
+    data: typeof DOIRedact !== "undefined" ? DOIRedact.sanitizeForLog(rawData) : rawData,
   };
-  logWriteQueue = logWriteQueue
-    .then(
-      () =>
-        new Promise((resolve) => {
-          chrome.storage.local.get({ [LOG_STORAGE_KEY]: [] }, (res) => {
-            const log = res[LOG_STORAGE_KEY];
-            log.push(entry);
-            if (log.length > LOG_MAX_ENTRIES) log.splice(0, log.length - LOG_MAX_ENTRIES);
-            chrome.storage.local.set({ [LOG_STORAGE_KEY]: log }, resolve);
-          });
-        })
-    )
-    // A logging failure should never break the feature that triggered it.
-    .catch(() => {});
-  return logWriteQueue;
+  logPendingEntries.push(entry);
+  if (!logFlushTimer) {
+    logFlushTimer = setTimeout(flushLogEntries, LOG_FLUSH_DEBOUNCE_MS);
+  }
+}
+
+function flushLogEntries() {
+  logFlushTimer = null;
+  if (!logPendingEntries.length) return;
+  const batch = logPendingEntries;
+  logPendingEntries = [];
+  chrome.storage.local.get({ [LOG_STORAGE_KEY]: [] }, (res) => {
+    const log = res[LOG_STORAGE_KEY].concat(batch);
+    if (log.length > LOG_MAX_ENTRIES) log.splice(0, log.length - LOG_MAX_ENTRIES);
+    chrome.storage.local.set({ [LOG_STORAGE_KEY]: log });
+  });
+}
+
+// One-time cleanup of a log stored before redaction/benign-noise-filtering
+// existed: strips secrets from already-persisted entries and drops
+// historical ResizeObserver noise outright, rather than leaving the leak in
+// place until the user happens to hit Clear Log themselves. Runs once per
+// bump of LOG_REDACTION_VERSION (onInstalled fires on every update, not
+// just a fresh install, which is what makes this reachable at all).
+const LOG_REDACTION_VERSION = 2;
+
+function migrateLogRedaction() {
+  chrome.storage.local.get({ [LOG_STORAGE_KEY]: [], logRedactionVersion: 0 }, (res) => {
+    if (res.logRedactionVersion >= LOG_REDACTION_VERSION) return;
+    if (typeof DOIRedact === "undefined") return; // shouldn't happen; never let this throw
+    const cleaned = res[LOG_STORAGE_KEY]
+      .filter((e) => !/ResizeObserver loop/i.test((e && e.message) || ""))
+      .map((e) => DOIRedact.sanitizeLogEntry(e));
+    chrome.storage.local.set({ [LOG_STORAGE_KEY]: cleaned, logRedactionVersion: LOG_REDACTION_VERSION });
+  });
+}
+
+// Best-effort: flush before the service worker is torn down, so entries
+// from the last debounce window (including whatever triggered the suspend)
+// aren't lost. Not a guarantee — onSuspend doesn't fire for every possible
+// termination (e.g. a hard crash) — but it's free insurance for the common
+// idle-suspend case.
+chrome.runtime.onSuspend.addListener(() => {
+  if (logFlushTimer) clearTimeout(logFlushTimer);
+  flushLogEntries();
+});
+
+// ---------------------------------------------------------------------------
+// Per-paper metadata cache (References / Cited By / Related Papers / Issue
+// Info). A real user's exported log showed the exact same DOI's full 5-call
+// fan-out re-firing on every popup re-open — 4-6 times within a few minutes
+// for a paper they were actively reading, ~30 upstream Crossref/Semantic
+// Scholar calls total for data that never changed. Persisted to
+// chrome.storage.local (not just an in-memory Map) because the service
+// worker is torn down aggressively in MV3, and an in-memory-only cache
+// would be empty again on exactly the next popup open — the case that
+// actually matters. (getSciHubUrl, the fifth action in that same fan-out,
+// isn't cached here: it never calls an external API at all, just builds a
+// URL string from local settings, so there's nothing to save.)
+// ---------------------------------------------------------------------------
+const METADATA_CACHE_KEY = "metadataCache";
+const METADATA_CACHE_MAX_ENTRIES = 500;
+const METADATA_CACHE_TTL_MS = {
+  getReferences: 30 * 24 * 3600e3,   // a published paper's reference list is immutable
+  getIssueInfo: 7 * 24 * 3600e3,     // volume/issue/ISSN for an already-published paper won't change
+  getRelatedPapers: 7 * 24 * 3600e3,
+  getCitedBy: 24 * 3600e3,           // citation counts change slowly but do change
+};
+const metadataCacheMemory = new Map(); // "action:doi" -> { at, value }
+
+function getCachedMetadata(action, doi) {
+  const key = action + ":" + doi;
+  const ttl = METADATA_CACHE_TTL_MS[action] || 6 * 3600e3;
+  const hot = metadataCacheMemory.get(key);
+  if (hot && Date.now() - hot.at < ttl) return Promise.resolve(hot.value);
+  return new Promise((resolve) => {
+    chrome.storage.local.get({ [METADATA_CACHE_KEY]: {} }, (res) => {
+      const entry = res[METADATA_CACHE_KEY][key];
+      resolve(entry && Date.now() - entry.at < ttl ? entry.value : undefined);
+    });
+  });
+}
+
+function setCachedMetadata(action, doi, value) {
+  const key = action + ":" + doi;
+  const entry = { at: Date.now(), value };
+  metadataCacheMemory.set(key, entry);
+  chrome.storage.local.get({ [METADATA_CACHE_KEY]: {} }, (res) => {
+    const table = res[METADATA_CACHE_KEY];
+    table[key] = entry;
+    const keys = Object.keys(table);
+    if (keys.length > METADATA_CACHE_MAX_ENTRIES) {
+      keys
+        .sort((a, b) => (table[a].at || 0) - (table[b].at || 0))
+        .slice(0, keys.length - METADATA_CACHE_MAX_ENTRIES)
+        .forEach((k) => delete table[k]);
+    }
+    chrome.storage.local.set({ [METADATA_CACHE_KEY]: table });
+  });
 }
 
 // Catches the service worker's own uncaught errors/rejections — the same
@@ -123,6 +226,7 @@ chrome.runtime.onInstalled.addListener(() => {
   });
 
   refreshUpdateCache();
+  migrateLogRedaction();
 });
 chrome.runtime.onStartup.addListener(() => {
   chrome.alarms.create(WATCHLIST_ALARM, { periodInMinutes: WATCHLIST_PERIOD_MINUTES });
@@ -644,6 +748,30 @@ let checkInFlight = false;
 // leaves headroom above doi_host.py's own worst case rather than racing it.
 const CHECK_TIMEOUT_MS = 300000;
 
+// DOI -> Date.now() of its last confirmed successful download. Guards
+// against a lagging/flaky availability check landing minutes after a
+// download already succeeded and flipping the badge back to "unavailable" —
+// observed live: a check for a DOI reported "unavailable" 20s after that
+// exact DOI had just downloaded successfully via Sci-Hub. This is not a
+// request/response mixup — every check/download already opens its own
+// dedicated native-messaging port with the DOI closure-captured per call,
+// so one call's result can't land against another's state — it's a real,
+// independent probe that came back wrong (mirror flakiness, or a check
+// that was queued before the download and only resolved after). Either way,
+// a directly-contradicting "unavailable" in the few minutes right after a
+// real success is more likely to be the stale/wrong one.
+const recentDownloadSuccess = new Map();
+const RECENT_DOWNLOAD_GUARD_MS = 5 * 60 * 1000; // 5 minutes
+
+function markRecentlyDownloaded(doi) {
+  if (doi) recentDownloadSuccess.set(doi, Date.now());
+}
+
+function isRecentlyDownloaded(doi) {
+  const at = recentDownloadSuccess.get(doi);
+  return typeof at === "number" && Date.now() - at < RECENT_DOWNLOAD_GUARD_MS;
+}
+
 function runNextCheck() {
   if (checkInFlight || checkQueue.length === 0) return;
   const { doi, tabId, title, authors } = checkQueue.shift();
@@ -675,6 +803,14 @@ function runNextCheck() {
 
     port.onMessage.addListener((message) => {
       if (message.type === "progress") return;
+      if (message.status === "unavailable" && isRecentlyDownloaded(doi)) {
+        // Contradicts a download we know just succeeded — leave existing
+        // badge/tabState untouched rather than trusting this one probe.
+        logEvent("warn", "background", "Ignored 'unavailable' check result contradicting a recent successful download", { doi });
+        port.disconnect();
+        finish();
+        return;
+      }
       if (message.status === "available") {
         setAvailableBadge(tabId);
         tabState[tabId] = { doi, title, authors, status: "available" };
@@ -743,6 +879,7 @@ function downloadDOI(doi) {
         const sizeInfo = message.size_kb ? ` (${message.size_kb} KB)` : "";
         notifyDownloadResult(true, filename ? `${filename}${sizeInfo}` : "Done");
         logEvent("info", "background", "downloadDOI succeeded", { doi, status: message.status, filepath: message.filepath, source: message.source });
+        markRecentlyDownloaded(doi);
       } else {
         notifyDownloadResult(false, message.detail || "Unknown error");
         logEvent("error", "background", "downloadDOI failed", { doi, status: message.status, detail: message.detail });
@@ -970,28 +1107,33 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
   }
 
   if (request.action === "getIssueInfo") {
-    fetch("https://api.crossref.org/works/" + encodeURIComponent(request.doi))
-      .then((r) => {
-        if (!r.ok) throw new Error("Crossref lookup failed (" + r.status + ")");
-        return r.json();
-      })
-      .then((data) => {
-        const msg = data && data.message;
-        if (!msg) throw new Error("No Crossref record for this DOI");
-        const issn = (msg.ISSN && msg.ISSN[0]) || null;
-        const volume = msg.volume || null;
-        const issue = msg.issue || null;
-        const journal = decodeHtmlEntities((msg["container-title"] && msg["container-title"][0]) || "");
-        const dateParts = (msg["published-print"] || msg["published-online"] || {})["date-parts"];
-        const year = (dateParts && dateParts[0] && dateParts[0][0]) || null;
-        if (!issn || !volume || !issue) {
-          throw new Error("This paper's Crossref record is missing volume/issue/ISSN");
-        }
-        sendResponse({ success: true, issn, volume, issue, journal, year });
-      })
-      .catch((err) => {
-        sendResponse({ success: false, error: err.message });
-      });
+    getCachedMetadata("getIssueInfo", request.doi).then((cached) => {
+      if (cached !== undefined) { sendResponse(cached); return; }
+      fetch("https://api.crossref.org/works/" + encodeURIComponent(request.doi))
+        .then((r) => {
+          if (!r.ok) throw new Error("Crossref lookup failed (" + r.status + ")");
+          return r.json();
+        })
+        .then((data) => {
+          const msg = data && data.message;
+          if (!msg) throw new Error("No Crossref record for this DOI");
+          const issn = (msg.ISSN && msg.ISSN[0]) || null;
+          const volume = msg.volume || null;
+          const issue = msg.issue || null;
+          const journal = decodeHtmlEntities((msg["container-title"] && msg["container-title"][0]) || "");
+          const dateParts = (msg["published-print"] || msg["published-online"] || {})["date-parts"];
+          const year = (dateParts && dateParts[0] && dateParts[0][0]) || null;
+          if (!issn || !volume || !issue) {
+            throw new Error("This paper's Crossref record is missing volume/issue/ISSN");
+          }
+          const resp = { success: true, issn, volume, issue, journal, year };
+          setCachedMetadata("getIssueInfo", request.doi, resp);
+          sendResponse(resp);
+        })
+        .catch((err) => {
+          sendResponse({ success: false, error: err.message });
+        });
+    });
     return true;
   }
 
@@ -1549,6 +1691,8 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
   }
 
   if (request.action === "getReferences") {
+    getCachedMetadata("getReferences", request.doi).then((cached) => {
+      if (cached !== undefined) { sendResponse(cached); return; }
     fetch("https://api.crossref.org/works/" + encodeURIComponent(request.doi))
       .then((r) => {
         if (!r.ok) throw new Error("Crossref lookup failed (" + r.status + ")");
@@ -1602,15 +1746,20 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
         return Promise.all(workers).then(() => withDOI);
       })
       .then((references) => {
-        sendResponse({ success: true, references });
+        const resp = { success: true, references };
+        setCachedMetadata("getReferences", request.doi, resp);
+        sendResponse(resp);
       })
       .catch((err) => {
         sendResponse({ success: false, error: err.message });
       });
+    });
     return true;
   }
 
   if (request.action === "getCitedBy") {
+    getCachedMetadata("getCitedBy", request.doi).then((cached) => {
+      if (cached !== undefined) { sendResponse(cached); return; }
     // "authors.name" isn't a recognized field on this endpoint (S2 returns
     // a 400 for it on every request) — plain "authors" returns each
     // citingPaper's full {authorId, name} objects instead.
@@ -1641,15 +1790,20 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
             year: p.year || null,
             author: (p.authors && p.authors[0] && p.authors[0].name) || "",
           }));
-        sendResponse({ success: true, citedBy });
+        const resp = { success: true, citedBy };
+        setCachedMetadata("getCitedBy", request.doi, resp);
+        sendResponse(resp);
       })
       .catch((err) => {
         sendResponse({ success: false, error: err.message });
       });
+    });
     return true;
   }
 
   if (request.action === "getRelatedPapers") {
+    getCachedMetadata("getRelatedPapers", request.doi).then((cached) => {
+      if (cached !== undefined) { sendResponse(cached); return; }
     // "Related by citation" rather than keyword-similarity (search.html's
     // Find Similar) — uses Semantic Scholar's Recommendations API,
     // which is built on their own citation graph (effectively co-citation:
@@ -1680,11 +1834,14 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
             year: p.year || null,
             author: (p.authors && p.authors[0] && p.authors[0].name) || "",
           }));
-        sendResponse({ success: true, related });
+        const resp = { success: true, related };
+        setCachedMetadata("getRelatedPapers", request.doi, resp);
+        sendResponse(resp);
       })
       .catch((err) => {
         sendResponse({ success: false, error: err.message });
       });
+    });
     return true;
   }
 
@@ -2222,6 +2379,7 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
         logEvent(message.status === "ok" ? "info" : "error", "background", "sendDOI result: " + (message.status || "unknown"), {
           doi: request.doi, status: message.status, detail: message.detail, filepath: message.filepath, source: message.source,
         });
+        if (message.status === "ok") markRecentlyDownloaded(request.doi);
         port.disconnect();
       });
 

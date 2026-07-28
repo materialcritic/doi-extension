@@ -731,9 +731,6 @@ async function expandNode(key) {
 
 // --- Joint works (edge click) ---------------------------------------------
 
-function sanitizeFolderName(name) {
-  return name.replace(/[^\w\-. ]/g, "").trim().replace(/\s+/g, " ") || "network";
-}
 
 function getSyncSettings() {
   return new Promise((resolve) => {
@@ -756,9 +753,9 @@ async function resolveJointOutputPaths(nameA, nameB) {
   const settings = await getSyncSettings();
   let baseDir = (settings.outputDir || "").replace(/\/+$/, "");
   if (!baseDir) baseDir = (await getDefaultOutputDir()).replace(/\/+$/, "");
-  const folderName = sanitizeFolderName(`Network Map - ${nameA} & ${nameB}`);
-  jointOutputDir = `${baseDir}/${folderName}`;
-  jointLogPath = `${jointOutputDir}/download_log.txt`;
+  const folderName = sanitizeFolderName(`Network Map - ${nameA} & ${nameB}`, "network");
+  jointOutputDir = joinOutputPath(baseDir, folderName);
+  jointLogPath = joinOutputPath(jointOutputDir, "download_log.txt");
 }
 
 function jointLogLine(line) {

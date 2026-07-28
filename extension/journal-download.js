@@ -20,10 +20,6 @@ const journal = params.get("journal") || "";
 
 journalTitleEl.textContent = journal ? `Download Entire Journal — ${journal}` : "Download Entire Journal";
 
-function sanitizeFolderName(name) {
-  return name.replace(/[^\w\-. ]/g, "").trim().replace(/\s+/g, " ") || "issue";
-}
-
 function getSettings() {
   return new Promise((resolve) => {
     chrome.storage.sync.get(["outputDir"], resolve);
@@ -257,9 +253,9 @@ function buildGroupSection(group) {
 const allGroupsRef = { current: [] };
 
 async function downloadGroup(group, groupStatusEl, rowRefs) {
-  const folderName = sanitizeFolderName(`${journal || issn} Vol ${group.volume} Issue ${group.issueNum || "unknown"}`);
-  const outputDir = `${baseOutputDir}/${folderName}`;
-  const logPath = `${outputDir}/download_log.txt`;
+  const folderName = sanitizeFolderName(`${journal || issn} Vol ${group.volume} Issue ${group.issueNum || "unknown"}`, "issue");
+  const outputDir = joinOutputPath(baseOutputDir, folderName);
+  const logPath = joinOutputPath(outputDir, "download_log.txt");
 
   group.started = true;
 

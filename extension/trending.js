@@ -61,9 +61,6 @@ function getDefaultOutputDir() {
     });
   });
 }
-function sanitizeFolderName(name) {
-  return name.replace(/[^\w\-. ]/g, "").trim().replace(/\s+/g, " ") || "topic";
-}
 
 let works = [];
 let displayWorks = [];
@@ -79,8 +76,8 @@ async function resolveOutputPaths() {
   const settings = await getSettings();
   let baseDir = (settings.outputDir || "").replace(/\/+$/, "");
   if (!baseDir) baseDir = (await getDefaultOutputDir()).replace(/\/+$/, "");
-  outputDirOverride = `${baseDir}/${sanitizeFolderName(topicName)}`;
-  logPath = `${outputDirOverride}/download_log.txt`;
+  outputDirOverride = joinOutputPath(baseDir, sanitizeFolderName(topicName, "topic"));
+  logPath = joinOutputPath(outputDirOverride, "download_log.txt");
 }
 
 function parseLog(content) {

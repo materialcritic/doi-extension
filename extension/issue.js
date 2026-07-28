@@ -111,10 +111,6 @@ btnWatch.addEventListener("click", () => {
   });
 });
 
-function sanitizeFolderName(name) {
-  return name.replace(/[^\w\-. ]/g, "").trim().replace(/\s+/g, " ") || "issue";
-}
-
 function getSettings() {
   return new Promise((resolve) => {
     chrome.storage.sync.get(["outputDir"], resolve);
@@ -153,9 +149,9 @@ async function resolveOutputPaths() {
   const settings = await getSettings();
   baseOutputDir = (settings.outputDir || "").replace(/\/+$/, "");
   if (!baseOutputDir) baseOutputDir = (await getDefaultOutputDir()).replace(/\/+$/, "");
-  const folderName = sanitizeFolderName(`${journal || issn} Vol ${volume} Issue ${issue}`);
-  outputDirOverride = `${baseOutputDir}/${folderName}`;
-  logPath = `${outputDirOverride}/download_log.txt`;
+  const folderName = sanitizeFolderName(`${journal || issn} Vol ${volume} Issue ${issue}`, "issue");
+  outputDirOverride = joinOutputPath(baseOutputDir, folderName);
+  logPath = joinOutputPath(outputDirOverride, "download_log.txt");
 }
 
 // Parses this issue's own download_log.txt (written by this page) to find
@@ -578,9 +574,9 @@ btnBatchCancel.addEventListener("click", () => {
 // checking pause/cancel between every single DOI (not just between issues)
 // so a click takes effect within seconds, not after a whole issue finishes.
 async function downloadIssueGroup(control, row, label, folderKey, works) {
-  const folderName = sanitizeFolderName(folderKey);
-  const outputDir = `${baseOutputDir}/${folderName}`;
-  const logPath = `${outputDir}/download_log.txt`;
+  const folderName = sanitizeFolderName(folderKey, "issue");
+  const outputDir = joinOutputPath(baseOutputDir, folderName);
+  const logPath = joinOutputPath(outputDir, "download_log.txt");
 
   let done = 0;
   let failed = 0;
@@ -742,9 +738,9 @@ function downloadSingleSearchResult(work, btn, statusEl) {
   statusEl.textContent = "Downloading…";
   statusEl.className = "work-status pending";
 
-  const folderName = sanitizeFolderName(`${journal || issn} Keyword Search`);
-  const outputDir = `${baseOutputDir}/${folderName}`;
-  const logPath = `${outputDir}/download_log.txt`;
+  const folderName = sanitizeFolderName(`${journal || issn} Keyword Search`, "issue");
+  const outputDir = joinOutputPath(baseOutputDir, folderName);
+  const logPath = joinOutputPath(outputDir, "download_log.txt");
   const timestamp = new Date().toISOString().replace("T", " ").slice(0, 19);
 
   chrome.runtime.sendMessage({ action: "sendDOI", doi: work.doi, outputDirOverride: outputDir }, (resp) => {

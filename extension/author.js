@@ -81,10 +81,6 @@ btnWatchAuthor.addEventListener("click", () => {
   });
 });
 
-function sanitizeFolderName(name) {
-  return name.replace(/[^\w\-. ]/g, "").trim().replace(/\s+/g, " ") || "author";
-}
-
 function getSettings() {
   return new Promise((resolve) => {
     chrome.storage.sync.get(["outputDir"], resolve);
@@ -122,9 +118,9 @@ async function resolveOutputPaths() {
   const settings = await getSettings();
   let baseDir = (settings.outputDir || "").replace(/\/+$/, "");
   if (!baseDir) baseDir = (await getDefaultOutputDir()).replace(/\/+$/, "");
-  const folderName = sanitizeFolderName(authorName);
-  outputDirOverride = `${baseDir}/${folderName}`;
-  logPath = `${outputDirOverride}/download_log.txt`;
+  const folderName = sanitizeFolderName(authorName, "author");
+  outputDirOverride = joinOutputPath(baseDir, folderName);
+  logPath = joinOutputPath(outputDirOverride, "download_log.txt");
 }
 
 // Parses this author's own download_log.txt (written by this page) to find
