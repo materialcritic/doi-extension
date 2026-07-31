@@ -73,6 +73,7 @@ def find_python_with_requests():
                 resolved = subprocess.run(
                     [py_launcher, "-3", "-c", "import sys; print(sys.executable)"],
                     capture_output=True, text=True, timeout=5,
+                    creationflags=subprocess.CREATE_NO_WINDOW,
                 )
                 if resolved.returncode == 0 and resolved.stdout.strip():
                     candidates.append(resolved.stdout.strip())
@@ -103,10 +104,17 @@ def find_python_with_requests():
             continue
         seen.add(key)
         try:
-            result = subprocess.run(
-                [exe] + extra_args + ["-c", "import requests, bs4"],
-                capture_output=True, timeout=5,
-            )
+            # Every one of these test-import calls (and the py-launcher
+            # resolve above) runs fresh on EVERY single check/download --
+            # find_python_with_requests() has no cache, and each request is
+            # a brand-new doi_host.py process per the native-messaging
+            # architecture. Without CREATE_NO_WINDOW here too, this would
+            # flash a console window on Windows just as often as the actual
+            # download spawn already got fixed to avoid.
+            run_kwargs = {"capture_output": True, "timeout": 5}
+            if IS_WINDOWS:
+                run_kwargs["creationflags"] = subprocess.CREATE_NO_WINDOW
+            result = subprocess.run([exe] + extra_args + ["-c", "import requests, bs4"], **run_kwargs)
             if result.returncode == 0:
                 return [exe] + extra_args if extra_args else exe
         except (OSError, subprocess.SubprocessError):
@@ -156,7 +164,25 @@ class _FileLock:
         try:
             if IS_WINDOWS:
                 import msvcrt
+                # msvcrt.locking() locks a byte range starting at the
+                # file's CURRENT position -- unlike fcntl.flock() below,
+                # which locks the whole file regardless of position. That
+                # matters here: Python's open(path, "a") on Windows only
+                # seeks to end-of-file ONCE, at open() time -- it does not
+                # re-seek before every write the way POSIX's O_APPEND flag
+                # guarantees at the kernel level. Two processes can each
+                # capture their own now-stale "my EOF" position at open
+                # time, then each successfully lock their own different
+                # (non-conflicting) stale byte range and still clobber each
+                # other on write. Locking a fixed sentinel byte at offset 0
+                # instead means every process contends for the SAME lock
+                # regardless of file size, so they're genuinely serialized;
+                # only then do we seek to the real current end-of-file
+                # (below, after the lock is held) to get a position no
+                # other lock-respecting writer can have moved past.
+                self.handle.seek(0)
                 msvcrt.locking(self.handle.fileno(), msvcrt.LK_LOCK, 1)
+                self.handle.seek(0, os.SEEK_END)
             else:
                 import fcntl
                 fcntl.flock(self.handle.fileno(), fcntl.LOCK_EX)
@@ -168,6 +194,7 @@ class _FileLock:
         try:
             if IS_WINDOWS:
                 import msvcrt
+                self.handle.seek(0)
                 msvcrt.locking(self.handle.fileno(), msvcrt.LK_UNLCK, 1)
             else:
                 import fcntl
