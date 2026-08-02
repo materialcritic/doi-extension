@@ -1,0 +1,21 @@
+# Force LF line endings on checkout regardless of platform. Without this,
+# Git for Windows' common default (core.autocrlf=true) rewrites every
+# tracked text file to CRLF the moment it's checked out -- which then makes
+# `git status` see every single file as "modified" from the LF version
+# actually committed, even though the user never touched anything. That
+# directly broke self-update for a real Windows user: `apply_update`'s
+# safety check (only pulls on a clean checkout) refused every single
+# attempt with "Local changes exist in the repo checkout," for a week,
+# because of line endings alone -- silently blocking them from ever
+# receiving a fix again, including this one. Every text file in this repo
+# is already stored as LF (verified directly, including install.ps1 and
+# doi_host.bat), so this doesn't change anything for existing clones -- it
+# only stops a *future* Windows clone from drifting.
+* text=auto eol=lf
+
+# Binary assets: never touch line endings, ever.
+*.png binary
+*.ico binary
+*.jpg binary
+*.jpeg binary
+*.gif binary

@@ -570,9 +570,26 @@ def main():
                 line for line in status.splitlines() if not line.startswith("??")
             ]
             if blocking_lines:
+                # Name the actual files git sees as changed, not just the
+                # generic refusal -- a real Windows user hit this on every
+                # single attempt for a week (line-ending normalization
+                # making git see every tracked file as "modified" with no
+                # .gitattributes pinning it -- see that file), and the old
+                # generic message gave no way to tell what was actually
+                # blocking it without a full log export. git status
+                # --porcelain paths are already relative to REPO_DIR, so
+                # there's no absolute-path/username content to redact here.
+                preview = blocking_lines[:10]
+                more = len(blocking_lines) - len(preview)
+                file_list = ", ".join(preview) + (f", and {more} more" if more > 0 else "")
+                detail = (
+                    "Local changes exist in the repo checkout — resolve or stash them before updating. "
+                    f"Changed: {file_list}"
+                )
+                debug_log(f"apply_update refused, {len(blocking_lines)} file(s) changed: {file_list}")
                 send_message({
                     "type": "result", "status": "error",
-                    "detail": "Local changes exist in the repo checkout — resolve or stash them before updating.",
+                    "detail": detail,
                 })
                 return
 
