@@ -719,6 +719,83 @@ def main():
             send_message({"type": "result", "status": "error", "detail": str(e)})
         return
 
+    if message.get("action") == "scan_pdf_dois":
+        url = message.get("url")
+        settings = message.get("settings") or {}
+        if not url:
+            send_message({"type": "result", "status": "error", "detail": "No PDF URL received"})
+            return
+
+        python_bin = settings.get("pythonBin") or PYTHON_BIN
+        script_path = settings.get("scriptPath") or YOUR_SCRIPT
+        python_bin_args = python_bin if isinstance(python_bin, list) else [python_bin]
+        cmd = python_bin_args + [script_path, "--scan-pdf-url", url]
+
+        debug_log(
+            f"spawning (scan_pdf_dois): url={url} platform={platform.system()} {platform.release()} "
+            f"python_bin={python_bin_args} (auto-detected={python_bin == PYTHON_BIN}) script={script_path}"
+        )
+
+        try:
+            popen_kwargs = {}
+            if IS_WINDOWS:
+                popen_kwargs["creationflags"] = subprocess.CREATE_NO_WINDOW
+
+            proc = subprocess.Popen(
+                cmd,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                encoding='utf-8', errors='replace',
+                bufsize=1,
+                **popen_kwargs,
+            )
+
+            # Same hard-timeout watchdog as the download/check dispatch below —
+            # a large multi-hundred-page PDF's text extraction has no
+            # per-chunk progress line, so this is what catches a genuine hang
+            # rather than just slow-but-progressing work.
+            HARD_TIMEOUT_SECONDS = 180
+            watchdog = threading.Timer(HARD_TIMEOUT_SECONDS, kill_process_tree, args=(proc,))
+            watchdog.start()
+            try:
+                result = None
+                for line in proc.stdout:
+                    line = line.rstrip("\n")
+                    if not line:
+                        continue
+                    if line.startswith("RESULT:"):
+                        try:
+                            result = json.loads(line[len("RESULT:"):])
+                        except json.JSONDecodeError:
+                            pass
+                    else:
+                        send_message({"type": "progress", "line": line})
+
+                stderr_output = proc.stderr.read()
+                proc.wait(timeout=90)
+            finally:
+                watchdog.cancel()
+
+            if result is not None:
+                send_message({"type": "result", **result})
+                debug_log(f"result (scan_pdf_dois): url={url} status={result.get('status')} count={len(result.get('dois') or [])}")
+            elif proc.returncode == 0:
+                send_message({"type": "result", "status": "ok", "dois": []})
+            else:
+                detail = stderr_output.strip() or "Script exited with an error"
+                send_message({"type": "result", "status": "error", "detail": detail})
+                debug_log(f"result (scan_pdf_dois): url={url} status=error returncode={proc.returncode} detail={detail}")
+
+        except subprocess.TimeoutExpired:
+            send_message({"type": "result", "status": "error", "detail": "Script timed out"})
+        except FileNotFoundError:
+            send_message({"type": "result", "status": "error", "detail": f"Script not found: {script_path}"})
+        except Exception as e:
+            send_message({"type": "result", "status": "error", "detail": str(e)})
+            debug_log(f"result (scan_pdf_dois): url={url} status=error detail={e}\n{traceback.format_exc()}")
+        return
+
     if "doi" not in message:
         send_message({"type": "result", "status": "error", "detail": "No DOI received"})
         return

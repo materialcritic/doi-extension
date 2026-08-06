@@ -38,6 +38,7 @@ const TOPIC_WATCHLIST_ALARM = "checkTopicWatchlist";
 const pendingWatchNotifications = {};
 
 const GRAB_DOI_MENU_ID = "doi-grabber-grab-selection";
+const SCAN_PAGE_MENU_ID = "doi-grabber-scan-page";
 
 // ---------------------------------------------------------------------------
 // Diagnostic logging: every meaningful user action and every error, so a user
@@ -223,6 +224,11 @@ chrome.runtime.onInstalled.addListener(() => {
       title: "Grab DOI from selection",
       contexts: ["selection"],
     });
+    chrome.contextMenus.create({
+      id: SCAN_PAGE_MENU_ID,
+      title: "Scan Page for DOIs",
+      contexts: ["page"],
+    });
   });
 
   refreshUpdateCache();
@@ -276,19 +282,41 @@ function cleanSelectionDOI(doi) {
 }
 
 chrome.contextMenus.onClicked.addListener((info, tab) => {
-  if (info.menuItemId !== GRAB_DOI_MENU_ID) return;
-  const doi = extractDOIFromText(info.selectionText);
-  if (!doi) {
-    chrome.notifications.create("doi-grab-selection-" + Date.now(), {
-      type: "basic",
-      iconUrl: "icons/icon128.png",
-      title: "No DOI found",
-      message: `Couldn't find a DOI in: "${(info.selectionText || "").slice(0, 80)}"`,
-    });
+  if (info.menuItemId === GRAB_DOI_MENU_ID) {
+    const doi = extractDOIFromText(info.selectionText);
+    if (!doi) {
+      chrome.notifications.create("doi-grab-selection-" + Date.now(), {
+        type: "basic",
+        iconUrl: "icons/icon128.png",
+        title: "No DOI found",
+        message: `Couldn't find a DOI in: "${(info.selectionText || "").slice(0, 80)}"`,
+      });
+      return;
+    }
+    downloadDOI(doi);
     return;
   }
-  downloadDOI(doi);
+  if (info.menuItemId === SCAN_PAGE_MENU_ID) {
+    openPageScanTab(tab);
+    return;
+  }
 });
+
+// Opens page-scan.html for the given tab — shared by the right-click menu
+// item above and the popup's "Scan Page for DOIs" button. The new tab does
+// its own scanning on load (via the scanPageForDOIs message action below),
+// rather than this function doing the scan itself and stashing a result,
+// since that keeps the popup's click handler a plain chrome.tabs.create
+// (same shape as every other "open a full-page tool" button) with no
+// storage hand-off or progress-relay-before-the-tab-exists complexity.
+function openPageScanTab(tab) {
+  const params = new URLSearchParams({
+    tabId: String(tab.id),
+    url: tab.url || "",
+    title: tab.title || "",
+  });
+  chrome.tabs.create({ url: chrome.runtime.getURL("page-scan.html") + "?" + params.toString() });
+}
 
 chrome.alarms.onAlarm.addListener((alarm) => {
   if (alarm.name === WATCHLIST_ALARM) checkWatchlist();
@@ -2396,6 +2424,147 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     });
 
     // Keep the message channel open until sendResponse is called
+    return true;
+  }
+
+  if (request.action === "scanPageForDOIs") {
+    // "Scan Page for DOIs": finds every DOI-shaped token on the given tab,
+    // driven from page-scan.js once its own tab has opened (both the popup
+    // button and the right-click menu item just open that tab — see
+    // openPageScanTab() above — rather than doing the scan here and handing
+    // results off through storage).
+    const tabId = request.tabId;
+    const url = request.url || "";
+    const isPdf = /\.pdf(?:[?#]|$)/i.test(url);
+
+    if (isPdf) {
+      // Chrome's built-in PDF viewer has no readable DOM a content script
+      // could scan, so this has to go through the native host, which
+      // downloads the actual file and extracts its text server-side (see
+      // scan_pdf_for_dois() in scihub_download.py).
+      getSettings().then((settings) => {
+        const port = chrome.runtime.connectNative(NATIVE_HOST);
+
+        port.onMessage.addListener((message) => {
+          if (message.type === "progress") {
+            chrome.runtime.sendMessage({ action: "progress", line: message.line }, () => void chrome.runtime.lastError);
+            return;
+          }
+          if (message.status === "ok") {
+            sendResponse({ success: true, dois: message.dois || [], source: "pdf" });
+            logEvent("info", "background", "Scanned PDF for DOIs", { url, count: (message.dois || []).length });
+          } else {
+            sendResponse({ success: false, error: message.detail || "Couldn't scan this PDF" });
+            logEvent("error", "background", "PDF DOI scan failed", { url, detail: message.detail });
+          }
+          port.disconnect();
+        });
+        port.onDisconnect.addListener(() => {
+          const err = chrome.runtime.lastError;
+          if (err) sendResponse({ success: false, error: err.message });
+        });
+        port.postMessage({ action: "scan_pdf_dois", url, settings });
+      });
+      return true;
+    }
+
+    // Regular web page: content.js is auto-injected on every page load
+    // (manifest content_scripts), so the plain message usually lands. Falls
+    // back to a fresh injection for tabs that predate the extension being
+    // loaded/reloaded — same two-step fallback popup.js's scanPage() already
+    // uses for getDOI.
+    chrome.tabs.sendMessage(tabId, { action: "scanPageDOIs" }, (response) => {
+      if (!chrome.runtime.lastError && response) {
+        sendResponse({ success: true, dois: response.dois || [], source: "page" });
+        return;
+      }
+      void chrome.runtime.lastError;
+      chrome.scripting
+        .executeScript({ target: { tabId }, files: ["content.js"] })
+        .then(() => {
+          chrome.tabs.sendMessage(tabId, { action: "scanPageDOIs" }, (response2) => {
+            if (chrome.runtime.lastError || !response2) {
+              sendResponse({ success: false, error: "Can't access this page." });
+              return;
+            }
+            sendResponse({ success: true, dois: response2.dois || [], source: "page" });
+          });
+        })
+        .catch(() => sendResponse({ success: false, error: "Can't access this page." }));
+    });
+    return true;
+  }
+
+  if (request.action === "resolveDoiList") {
+    // Backfills title/author/journal/year/citations for a raw list of DOIs
+    // found by a page scan — same throttled-3-at-a-time-with-one-retry
+    // pattern as getBibliographyExport's Crossref backfill, since firing
+    // dozens/hundreds of lookups at once would just start 429ing. Unlike
+    // that handler, a 404 here is treated as final (not retried) and
+    // flagged distinctly: a page/PDF scan can turn up a DOI-shaped string
+    // that isn't a real registered DOI at all (most commonly a PDF-text-
+    // extraction artifact truncating it — see extract_all_dois()'s
+    // docstring in scihub_download.py), and retrying a 404 wastes a call
+    // for the same outcome.
+    const doiList = Array.isArray(request.dois) ? request.dois : [];
+    if (doiList.length === 0) {
+      sendResponse({ success: true, entries: [] });
+      return;
+    }
+
+    const entries = doiList.map((doi) => ({
+      doi, title: null, author: "", journal: "", year: null, citations: null, notFound: false, error: false,
+    }));
+    const CONCURRENCY = 3;
+    let cursor = 0;
+    let done = 0;
+
+    const fetchOne = (entry, isRetry) =>
+      // No `?select=` here -- unlike Crossref's search/listing endpoints
+      // used elsewhere in this file, the single-work-by-DOI route rejects it
+      // outright with a 400 ("This route does not support select"),
+      // confirmed live. Fetches the full work object instead, same as
+      // getBibliographyExport's identical-shaped backfill.
+      fetch("https://api.crossref.org/works/" + encodeURIComponent(entry.doi))
+        .then((r) => {
+          if (r.status === 404) {
+            entry.notFound = true;
+            return null;
+          }
+          if (!r.ok) throw new Error("status " + r.status);
+          return r.json();
+        })
+        .then((data) => {
+          if (!data) return;
+          const msg = data.message;
+          entry.title = decodeHtmlEntities((msg && msg.title && msg.title[0]) || "") || null;
+          const authors = ((msg && msg.author) || []).map((a) => decodeHtmlEntities([a.given, a.family].filter(Boolean).join(" ")));
+          entry.author = authors.join(", ");
+          entry.journal = decodeHtmlEntities((msg && msg["container-title"] && msg["container-title"][0]) || "");
+          const dateParts = (msg && (msg["published-print"] || msg["published-online"]) || {})["date-parts"];
+          entry.year = (dateParts && dateParts[0] && dateParts[0][0]) || null;
+          entry.citations = typeof (msg && msg["is-referenced-by-count"]) === "number" ? msg["is-referenced-by-count"] : null;
+        })
+        .catch((err) => {
+          if (!isRetry) return fetchOne(entry, true);
+          entry.error = true;
+        })
+        .finally(() => {
+          done += 1;
+          chrome.runtime.sendMessage({ action: "progress", line: `Fetching paper details… ${done}/${entries.length}` }, () => void chrome.runtime.lastError);
+        });
+
+    const worker = () => {
+      if (cursor >= entries.length) return Promise.resolve();
+      const entry = entries[cursor];
+      cursor += 1;
+      return fetchOne(entry, false).then(worker);
+    };
+
+    const workers = new Array(Math.min(CONCURRENCY, entries.length)).fill(0).map(worker);
+    Promise.all(workers).then(() => {
+      sendResponse({ success: true, entries });
+    });
     return true;
   }
 });

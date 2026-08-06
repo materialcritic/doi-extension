@@ -62,6 +62,61 @@ function cleanDOI(doi) {
   return doi.replace(/[.,;)\]}"'>]+$/, "").trim();
 }
 
+// Same bare-DOI shape as DOI_PATTERNS[2] above, but global so every
+// occurrence in the page's visible text is found, not just the first —
+// used by scanAllDOIs() below, not by the single-DOI findDOI() path.
+const DOI_SCAN_PATTERN = /\b10\.\d{4,}(?:\.\d+)*\/[^\s,;\])"'>]+/gi;
+const DOI_SCAN_MAX_RESULTS = 500;
+
+// "Scan Page for DOIs": finds every DOI-shaped token anywhere on the page —
+// visible text, doi.org/Sci-Hub links, and any meta tag whose name/property
+// mentions "doi" (not just citation_doi, since findMetadata()'s single-DOI
+// path already covers the primary one and this needs to catch secondary
+// ones too, e.g. a page listing both its own DOI and a related work's).
+function scanAllDOIs() {
+  const seen = new Set();
+  const results = [];
+
+  function addCandidate(raw) {
+    if (results.length >= DOI_SCAN_MAX_RESULTS) return;
+    const doi = cleanDOI(raw);
+    if (!doi || doi.length < 8) return;
+    const key = doi.toLowerCase();
+    if (seen.has(key)) return;
+    seen.add(key);
+    results.push(doi);
+  }
+
+  document.querySelectorAll("a[href]").forEach((a) => {
+    const href = a.getAttribute("href") || "";
+    const m = href.match(/(?:doi\.org|sci-hub\.[a-z]+)\/(10\.\d{4,}(?:\.\d+)*\/[^\s?#]+)/i);
+    if (m) {
+      try {
+        addCandidate(decodeURIComponent(m[1]));
+      } catch (e) {
+        addCandidate(m[1]); // malformed %-escape — fall back to the raw match
+      }
+    }
+  });
+
+  document.querySelectorAll("meta[content]").forEach((tag) => {
+    const nameAttr = ((tag.getAttribute("name") || "") + " " + (tag.getAttribute("property") || "")).toLowerCase();
+    if (!nameAttr.includes("doi")) return;
+    const content = tag.getAttribute("content") || "";
+    if (content.startsWith("10.")) addCandidate(content);
+  });
+
+  const bodyText = document.body.innerText || "";
+  DOI_SCAN_PATTERN.lastIndex = 0;
+  let match;
+  while ((match = DOI_SCAN_PATTERN.exec(bodyText)) !== null) {
+    addCandidate(match[0]);
+    if (results.length >= DOI_SCAN_MAX_RESULTS) break;
+  }
+
+  return results;
+}
+
 // Pull the paper's title and author(s) from meta tags, for use as a
 // fallback search query when the DOI itself isn't downloadable.
 function findMetadata() {
@@ -120,6 +175,9 @@ chrome.runtime.onMessage.addListener((request, _sender, sendResponse) => {
     const doi = findDOI();
     const { title, authors } = findMetadata();
     sendResponse({ doi, title, authors });
+  }
+  if (request.action === "scanPageDOIs") {
+    sendResponse({ dois: scanAllDOIs() });
   }
 });
 

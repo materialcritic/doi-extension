@@ -23,6 +23,7 @@ const btnRelated = document.getElementById("btn-related");
 const relatedPanel = document.getElementById("related-panel");
 const relatedList = document.getElementById("related-list");
 const btnIssue = document.getElementById("btn-issue");
+const btnScanPage = document.getElementById("btn-scan-page");
 const statusEl  = document.getElementById("status");
 const logEl     = document.getElementById("log");
 const statusBanner = document.getElementById("status-banner");
@@ -650,6 +651,18 @@ btnCollaborators.addEventListener("click", () => {
   if (!currentAuthors.length) return;
   const url = chrome.runtime.getURL("collaborators.html") + "?author=" + encodeURIComponent(currentAuthors[0]);
   chrome.tabs.create({ url });
+});
+
+// Unlike every other Explore-tab button, this doesn't depend on a DOI (or
+// author) having been detected on the current page — it works on any page,
+// including ones with no single "primary" paper at all (a table of
+// contents, a reading list) — so it's the only row here left enabled by
+// default rather than gated on currentDOI/currentAuthors.
+btnScanPage.addEventListener("click", async () => {
+  const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+  if (!tab) return;
+  const params = new URLSearchParams({ tabId: String(tab.id), url: tab.url || "", title: tab.title || "" });
+  chrome.tabs.create({ url: chrome.runtime.getURL("page-scan.html") + "?" + params.toString() });
 });
 
 btnIssue.addEventListener("click", () => {

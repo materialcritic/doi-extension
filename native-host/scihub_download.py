@@ -15,7 +15,7 @@ import threading
 import time
 from datetime import datetime, timedelta
 from pathlib import Path
-from urllib.parse import quote, urljoin
+from urllib.parse import quote, urljoin, urlparse, unquote
 
 import requests
 from bs4 import BeautifulSoup
@@ -45,6 +45,52 @@ MIRROR_HEALTH_MAX_AGE_DAYS = 4
 # Samples kept per hour-of-day bucket — enough to smooth out one-off blips
 # without mirror_health.json growing unbounded over months of use.
 HOURLY_LATENCY_MAX_SAMPLES = 10
+
+# Same char-class-exclusion + trailing-trim shape as content.js's
+# findDOI()/cleanDOI() bare-DOI pattern (kept in sync by hand, same as every
+# other DOI-shaped regex duplicated across the JS/Python boundary in this
+# codebase) — used here to find *every* DOI-shaped token in a document's
+# text rather than just the first one.
+DOI_SCAN_PATTERN = re.compile(r'\b10\.\d{4,}(?:\.\d+)*/[^\s,;\])"\'>]+', re.IGNORECASE)
+
+
+def extract_all_dois(text, limit=500):
+    """Scan arbitrary text for every DOI-shaped token, deduplicated
+    case-insensitively (first-seen casing kept) and capped at `limit` so a
+    pathological document (e.g. a PDF with a huge reference list) can't
+    balloon the result unboundedly.
+
+    Known limitation, deliberately not worked around here: pypdf's
+    extract_text() can inject stray single spaces/newlines mid-token on some
+    PDFs (confirmed live against a real PLOS ONE article, where
+    "10.1371/journal.pone.0270949" came back as "10.1371/j ournal.\\npone.
+    027094 9") -- a font/kerning quirk that affects the whole document's
+    text, not something specific to DOIs. A regex tolerant of embedded
+    whitespace was tried and rejected: it can't distinguish an artifact
+    break from a genuine word boundary, so it either misses real
+    continuations or swallows following prose depending on the input, with
+    no reliable way to tell which. Left as a plain non-tolerant match
+    instead, which can come back truncated on an affected PDF -- the
+    downstream Crossref lookup (background.js's resolveDoiList) is expected
+    to 404 on a truncated DOI and flag it for the user rather than silently
+    guessing at a repair.
+    """
+    if not text:
+        return []
+    seen = set()
+    results = []
+    for m in DOI_SCAN_PATTERN.finditer(text):
+        doi = m.group(0).rstrip('.,;)]}"\'>').strip()
+        if len(doi) < 8 or '/' not in doi:
+            continue
+        key = doi.lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        results.append(doi)
+        if len(results) >= limit:
+            break
+    return results
 
 
 def load_mirror_health():
@@ -642,6 +688,88 @@ class SciHubDownloader:
         """Print a machine-readable result line for the native host to parse"""
         print("RESULT:" + json.dumps({"status": status, **fields}), flush=True)
 
+    def scan_pdf_for_dois(self, url, max_dois=500):
+        """Downloads the PDF at `url` into a temp file, extracts its text with
+        pypdf, and regex-scans that text for every DOI-shaped token. Used by
+        "Scan Page for DOIs" when the active tab is a PDF opened directly in
+        Chrome — Chrome's built-in PDF viewer exposes no readable DOM a
+        content script could scan, so this has to happen server-side against
+        the original file instead of client-side like a regular web page.
+
+        pypdf is a lazy import here (not a module-level one) so that every
+        *other* action in this script keeps working unmodified on an
+        existing install that doesn't have it — only this specific action
+        needs it, unlike requests/bs4, which the whole script needs
+        unconditionally.
+        """
+        try:
+            from pypdf import PdfReader
+        except ImportError:
+            self.emit_result("error", detail="PDF scanning needs the 'pypdf' package. Install it with: python3 -m pip install pypdf")
+            return
+
+        # A PDF opened directly in Chrome from a local file (drag-and-drop, a
+        # file:// link, or a previous Sci-Hub/Unpaywall/SciDB download opened
+        # back up) has a file:// tab URL, not an http(s) one -- requests has
+        # no adapter for that scheme at all ("No connection adapters were
+        # found for 'file://...'"), confirmed live against a real local PDF.
+        # Read it straight off disk in that case instead of trying to GET it.
+        parsed = urlparse(url)
+        if parsed.scheme == 'file':
+            local_path = unquote(parsed.path)
+            # file:///C:/Users/... parses to "/C:/Users/..." -- a leading
+            # slash before a Windows drive letter isn't a valid path.
+            if re.match(r'^/[A-Za-z]:/', local_path):
+                local_path = local_path[1:]
+            print(f"Reading local PDF: {local_path}...", flush=True)
+            try:
+                with open(local_path, 'rb') as f:
+                    content = f.read()
+            except OSError as e:
+                self.emit_result("error", detail=f"Couldn't read the local PDF file: {e}")
+                return
+        else:
+            print(f"Downloading PDF from {url}...", flush=True)
+            try:
+                response = self.session.get(url, timeout=60, allow_redirects=True)
+                response.raise_for_status()
+            except requests.RequestException as e:
+                self.emit_result("error", detail=f"Couldn't download the PDF: {e}")
+                return
+            content = response.content
+
+        if content[:5] != b'%PDF-':
+            self.emit_result("error", detail="That URL didn't return a real PDF (possibly a login/paywall page).")
+            return
+
+        print(f"Extracting text ({len(content) // 1024} KB)...", flush=True)
+        tmp_path = None
+        try:
+            with tempfile.NamedTemporaryFile(suffix='.pdf', delete=False) as f:
+                f.write(content)
+                tmp_path = f.name
+
+            reader = PdfReader(tmp_path)
+            text_parts = []
+            for i, page in enumerate(reader.pages):
+                text_parts.append(page.extract_text() or '')
+                if (i + 1) % 10 == 0:
+                    print(f"Scanned {i + 1}/{len(reader.pages)} pages...", flush=True)
+            text = '\n'.join(text_parts)
+        except Exception as e:
+            self.emit_result("error", detail=f"Couldn't read this PDF's text: {e}")
+            return
+        finally:
+            if tmp_path:
+                try:
+                    os.remove(tmp_path)
+                except OSError:
+                    pass
+
+        dois = extract_all_dois(text, limit=max_dois)
+        print(f"Found {len(dois)} DOI(s).", flush=True)
+        self.emit_result("ok", dois=dois)
+
     def download_pdf(self, identifier, filename=None):
         """Download the PDF file"""
         print(f"Searching for: {identifier}", flush=True)
@@ -752,7 +880,8 @@ def main():
     )
     parser.add_argument(
         'identifier',
-        help='DOI, PMID, or paper URL'
+        nargs='?',
+        help='DOI, PMID, or paper URL (not needed with --scan-pdf-url)'
     )
     parser.add_argument(
         '-o', '--output',
@@ -785,12 +914,23 @@ def main():
         '--email',
         help='Contact email sent with Unpaywall API requests (default: the UNPAYWALL_EMAIL constant in this file)'
     )
+    parser.add_argument(
+        '--scan-pdf-url',
+        help='Download the PDF at this URL and scan its text for every DOI-shaped token, instead of downloading a single paper'
+    )
 
     args = parser.parse_args()
 
     mirrors = [m.strip() for m in args.mirrors.split(',') if m.strip()] if args.mirrors else None
     scidb_mirrors = [m.strip() for m in args.scidb_mirrors.split(',') if m.strip()] if args.scidb_mirrors else None
     downloader = SciHubDownloader(output_dir=args.directory, verbose=args.verbose, mirrors=mirrors, unpaywall_email=args.email, scidb_mirrors=scidb_mirrors)
+
+    if args.scan_pdf_url:
+        downloader.scan_pdf_for_dois(args.scan_pdf_url)
+        sys.exit(0)
+
+    if not args.identifier:
+        parser.error('identifier is required unless --scan-pdf-url is given')
 
     if args.check:
         pdf_url = downloader.get_pdf_url(args.identifier)

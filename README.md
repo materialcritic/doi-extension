@@ -30,6 +30,7 @@ This is a **personal, single-machine tool** — it is not published on the Chrom
   - [Similar Papers](#similar-papers)
   - [Author Network Map](#author-network-map)
   - [Citation Snowball Graph](#citation-snowball-graph)
+  - [Scan Page for DOIs](#scan-page-for-dois)
 - [Settings page](#settings-page)
 - [Keeping it up to date](#keeping-it-up-to-date)
 - [Reporting a bug or requesting a feature](#reporting-a-bug-or-requesting-a-feature)
@@ -51,7 +52,7 @@ Open any academic paper's page (a journal site, a DOI resolver link, PhilPapers,
    - **The publisher's own landing page** (looks for a `citation_pdf_url` meta tag or a direct PDF link, if Unpaywall also has nothing)
 4. If it's still unavailable, offers **fallbacks**: search Google for the title + author, search Google Scholar for the author, or (for SAGE papers specifically) jump straight to SAGE's own PDF viewer in case it's actually open-access.
 
-On top of the single-paper flow, it also has full pages for **bulk-downloading** an author's entire output, an entire journal issue, or an entire journal; browsing a paper's **references** and **citations**; finding **similar/related papers**; **watching** a journal or author for new releases; mapping out a **collaboration network** starting from a group of authors; and **exporting** your download history as a citation file (BibTeX/RIS) or a full settings/history backup.
+On top of the single-paper flow, it also has full pages for **bulk-downloading** an author's entire output, an entire journal issue, or an entire journal; browsing a paper's **references** and **citations**; finding **similar/related papers**; **watching** a journal or author for new releases; mapping out a **collaboration network** starting from a group of authors; **scanning a whole page (or an open PDF) for every DOI it mentions** and bulk-downloading a checklist of them; and **exporting** your download history as a citation file (BibTeX/RIS) or a full settings/history backup.
 
 ## How it's built
 
@@ -101,6 +102,11 @@ No prior experience with Terminal, git, or Python required — every command bel
    pip3 install requests beautifulsoup4
    ```
    You should see a "Successfully installed…" message at the end.
+6. *(Optional — only needed for [Scan Page for DOIs](#scan-page-for-dois)'s PDF support)* Install `pypdf`:
+   ```bash
+   pip3 install pypdf
+   ```
+   Everything else works fine without this — it's only used to read the text out of a PDF opened directly in Chrome. Skip it if you don't plan to use that feature on PDFs; you can always come back and install it later.
 
 </details>
 
@@ -126,6 +132,11 @@ No prior experience with Terminal, git, or Python required — every command bel
    py -m pip install requests beautifulsoup4
    ```
    You should see a "Successfully installed…" message at the end.
+6. *(Optional — only needed for [Scan Page for DOIs](#scan-page-for-dois)'s PDF support)* Install `pypdf`:
+   ```powershell
+   py -m pip install pypdf
+   ```
+   Everything else works fine without this — it's only used to read the text out of a PDF opened directly in Chrome. Skip it if you don't plan to use that feature on PDFs; you can always come back and install it later.
 
 </details>
 
@@ -264,6 +275,7 @@ Click the toolbar icon on any page with a detected DOI to get:
 | **References** | Lists the paper's references (via Crossref), each row clickable straight to its DOI page (redirects to whichever publisher/journal hosts it). |
 | **Cited By** | Lists papers that cite this one (via Semantic Scholar), each row clickable straight to its DOI page. |
 | **Related Papers** | Citation-graph-based recommendations (via Semantic Scholar's Recommendations API) — different from the keyword-based "Find Similar" on the full-page tools. Each row also opens straight to its DOI page. |
+| **Scan Page for DOIs** | Opens the [Scan Page for DOIs](#scan-page-for-dois) results page for the current tab — always enabled, doesn't require a DOI to have been detected on the page. Also reachable by right-clicking anywhere on a page and choosing **"Scan Page for DOIs."** |
 | **Reveal in Finder** | Shown after a successful download — opens Finder (macOS) or File Explorer (Windows) with the file selected. |
 | **Delete Corrupt File** | Shown if the download failed the PDF-header check (usually means a mirror served an HTML error page instead of a real PDF). |
 | **Search Google Instead** | Opens a Google search for `<title> <author>` — always available, not just when unavailable. |
@@ -360,6 +372,16 @@ Reached from Settings → **Citation Snowballing** (not the popup). Give it a se
 
 **View as graph** opens a dedicated tab (`graph.html`) rendering the walk as a pannable, zoomable node graph: the seed centered, references fanning left (teal), citations fanning right (coral), edges drawn between them including the convergence edges dedup would otherwise hide. Each node shows the paper's title and author (backward/Crossref nodes that come back title-less are batch-enriched from OpenAlex afterward); hovering a node shows the full title/author plus its abstract, lazily fetched and cached per DOI the moment you hover it — nothing is fetched for papers you never look at. Clicking a node (a real click, not a drag) opens that paper's `doi.org` page in a new tab. The graph has its own **Direction**/**Depth** filter bar that narrows what's currently drawn — this filters the graph already sitting in memory, it never re-runs the walk — and follows the extension's active color theme like every other page.
 
+### Scan Page for DOIs
+
+Reached from the popup's **Scan Page for DOIs** row (Explore tab — always enabled, no DOI needs to be detected first) or by right-clicking anywhere on a page and choosing **"Scan Page for DOIs"** from the context menu. Finds *every* DOI-shaped string on the current tab — not just the page's own "primary" paper — and opens a results page listing each one with its title/author/journal/year (backfilled from Crossref) so you can pick which ones to download, the same checklist-and-batch pattern as [Download This Issue](#download-this-issue).
+
+- **Regular web pages** are scanned client-side: visible page text, every `doi.org`/Sci-Hub-style link, and any meta tag mentioning "doi" (not just the primary `citation_doi`). Handy for a references/bibliography page, a table of contents, or any page listing several papers at once.
+- **A PDF opened directly in Chrome** (a URL ending in `.pdf`) is handled differently: Chrome's built-in PDF viewer has no readable DOM a content script could scan, so the native host downloads the actual PDF file and extracts its text server-side (needs the optional `pypdf` package — see [Prerequisites](#prerequisites)) to scan for DOIs there instead.
+- Each row has a checkbox (checked by default), so you control exactly which DOIs actually get downloaded — same **Select All** / **Select None** / pause / cancel / progress-bar machinery as the other bulk-download pages, into their own `Page Scan - <page title> (<date>)` subfolder and log.
+- A DOI that Crossref can't find at all is flagged with a warning and **unchecked by default** rather than assumed downloadable — most commonly this means a PDF-text-extraction artifact truncated it (see [Known limitations](#known-limitations)), though very rarely it's just a real DOI Crossref hasn't indexed yet. You can still check it by hand if you want to try downloading it anyway.
+- Click any row's title to lazily fetch and show its abstract, same as the other bulk-download pages.
+
 ## Settings page
 
 Right-click the toolbar icon → **Options** (or click ⚙ in the popup):
@@ -419,6 +441,7 @@ doi-extension/
 │   ├── search.html / search.js    # "Similar Papers" results page
 │   ├── network.html / network.js  # "Author Network Map" page
 │   ├── graph.html / graph.js      # "Citation Snowball Graph" page (opened from Settings)
+│   ├── page-scan.html/.js         # "Scan Page for DOIs" results page
 │   ├── report.html / report.js    # Bug/feature report form
 │   ├── theme.js                   # Shared 6-palette color theme system
 │   ├── shortcuts.js                # Shared popup-shortcut definitions
@@ -447,6 +470,8 @@ doi-extension/
 - **Windows support has had one round of real hands-on testing** (a genuine `install.ps1` parse bug was found and fixed as a result — see [Troubleshooting](#troubleshooting)), but is still far less battle-tested than the macOS path.
 - On Linux, "Reveal in Finder" falls back to just opening the containing folder (via `xdg-open`) rather than selecting the file within it — there's no single standard way to select a specific file across Linux file managers the way `open -R`/`explorer /select,` do on macOS/Windows.
 - **Self-update only supports a clean fast-forward** — if you've made local edits to the code, or your branch has diverged from `origin` for any other reason, "Update Now" will refuse rather than merge/rebase automatically. Commit, stash, or reset your changes first, then update.
+- **Scan Page for DOIs on a PDF can come back with truncated DOIs on some PDFs** — confirmed live against a real PLOS ONE article: `pypdf`'s text extraction occasionally injects a stray space or newline in the middle of a word (a font/kerning quirk affecting the whole document's text, not something specific to DOIs), which can chop a DOI short (e.g. `10.1371/journal.pone.0270949` coming back as `10.1371/j`). Not silently guessed at — a DOI Crossref can't find at all is flagged and left unchecked by default, but a real DOI could in principle also get a false "not found" flag this way. Only ever affects the PDF path, not regular web pages.
+- **Scan Page for DOIs only detects a PDF tab by its URL ending in `.pdf`** — a PDF served without that extension (uncommon, but it happens) is instead scanned like a regular web page, which will find nothing since Chrome's PDF viewer has no readable page text for a content script to see.
 
 ## Troubleshooting
 
@@ -467,6 +492,9 @@ doi-extension/
   - Or explicitly set **Settings → Python interpreter path** to the full path of a `python`/`python.exe` that already has them — this always overrides auto-detection. Find candidates on Windows with `py -0`; check one has the packages with `<path> -c "import requests, bs4"`.
 - On Windows specifically, the auto-detect (`find_python_with_requests()` in `doi_host.py`) checks PATH, the `py` launcher (`py -3`), and the standard python.org/Microsoft Store install locations — but an unusual install location (e.g. a custom drive/folder, or a venv) can still fall outside all of those, landing on some other interpreter without the packages. Setting the Python interpreter path in Settings is the reliable fix in that case.
 - More generally, check the Python interpreter set in Settings actually has `requests` and `beautifulsoup4` installed: `<your-python-path> -c "import requests, bs4"`.
+
+**"Scan Page for DOIs" on a PDF fails with something like "PDF scanning needs the 'pypdf' package":**
+- This is the one dependency that isn't installed by the main setup steps, since it's only needed for scanning PDFs opened directly in Chrome (a regular web page doesn't need it). Install it for whichever Python interpreter the native host is using: `python3 -m pip install pypdf` (or `py -m pip install pypdf` on Windows) — see [Prerequisites](#prerequisites).
 
 **No DOI detected on a page that clearly has one:**
 - Some publishers (SAGE was one) put author/title metadata in nonstandard places `content.js` may not check yet — file a bug report from Settings with the URL and what you'd expect it to detect.
