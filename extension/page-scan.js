@@ -33,7 +33,12 @@ function hostnameOf(url) {
 
 const sourceLabel = sourceTitle || hostnameOf(sourceUrl) || "this page";
 pageTitleEl.textContent = "Scan Page for DOIs";
-subtitleEl.textContent = (isPdfSource ? "Downloading and reading the PDF… " : "Scanning ") + sourceLabel;
+// This initial text is only visible for an instant — the real "Downloading
+// PDF from…"/"Reading local PDF…" progress line (native host, either the
+// remote-fetch or local-file branch of scan_pdf_for_dois) overwrites it via
+// the listener below almost immediately. Kept scheme-agnostic here since a
+// PDF tab can be either a remote URL or a local file:// one.
+subtitleEl.textContent = (isPdfSource ? "Reading the PDF… " : "Scanning ") + sourceLabel;
 subtitleEl.title = sourceUrl;
 
 function getSettings() {

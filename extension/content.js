@@ -106,7 +106,11 @@ function scanAllDOIs() {
     if (content.startsWith("10.")) addCandidate(content);
   });
 
-  const bodyText = document.body.innerText || "";
+  // document.body can be null on a non-HTML document (raw XML/RSS, a page
+  // still mid-parse) — findDOI() above has the same assumption already, but
+  // that one only ever runs after document_idle; this can also be invoked
+  // on demand via the popup/context-menu at any point, so guard it here too.
+  const bodyText = (document.body && document.body.innerText) || "";
   DOI_SCAN_PATTERN.lastIndex = 0;
   let match;
   while ((match = DOI_SCAN_PATTERN.exec(bodyText)) !== null) {

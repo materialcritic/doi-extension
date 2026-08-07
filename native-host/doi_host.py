@@ -17,6 +17,7 @@ import threading
 import time
 import traceback
 from datetime import datetime, timedelta, timezone
+from urllib.parse import urlparse
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 IS_WINDOWS = platform.system() == "Windows"
@@ -211,6 +212,24 @@ def _redact_debug_log_path(text):
     text = re.sub(r"([A-Za-z]:[\\/]Users[\\/])[^\\/\s]+", r"\1<user>", text)
     text = re.sub(r"(/(?:home|Users)/)[^/\s]+", r"\1<user>", text)
     return text
+
+
+def _redact_url_for_log(url):
+    """Strip the query string and fragment from a URL before it's ever
+    written to debug_log.txt (an exportable, shareable file) — mirrors
+    extension/redact.js's URL handling on the JS side, added after a real
+    user's exported log turned out to contain a live Gmail URL's query
+    string. `_redact_debug_log_path` above only masks a bare filesystem
+    path's account name, not a URL's query/fragment, so a "Scan Page for
+    DOIs" run against an institutional-proxy or other tokenized URL (common
+    for exactly the paywalled-access case this extension exists for) needs
+    this separate pass. Never raises -- an unparseable string is logged as
+    given rather than losing the whole diagnostic line over it."""
+    try:
+        parsed = urlparse(url)
+        return parsed._replace(query="", fragment="").geturl()
+    except Exception:
+        return url
 
 
 def debug_log(line):
@@ -732,7 +751,7 @@ def main():
         cmd = python_bin_args + [script_path, "--scan-pdf-url", url]
 
         debug_log(
-            f"spawning (scan_pdf_dois): url={url} platform={platform.system()} {platform.release()} "
+            f"spawning (scan_pdf_dois): url={_redact_url_for_log(url)} platform={platform.system()} {platform.release()} "
             f"python_bin={python_bin_args} (auto-detected={python_bin == PYTHON_BIN}) script={script_path}"
         )
 
@@ -779,13 +798,13 @@ def main():
 
             if result is not None:
                 send_message({"type": "result", **result})
-                debug_log(f"result (scan_pdf_dois): url={url} status={result.get('status')} count={len(result.get('dois') or [])}")
+                debug_log(f"result (scan_pdf_dois): url={_redact_url_for_log(url)} status={result.get('status')} count={len(result.get('dois') or [])}")
             elif proc.returncode == 0:
                 send_message({"type": "result", "status": "ok", "dois": []})
             else:
                 detail = stderr_output.strip() or "Script exited with an error"
                 send_message({"type": "result", "status": "error", "detail": detail})
-                debug_log(f"result (scan_pdf_dois): url={url} status=error returncode={proc.returncode} detail={detail}")
+                debug_log(f"result (scan_pdf_dois): url={_redact_url_for_log(url)} status=error returncode={proc.returncode} detail={detail}")
 
         except subprocess.TimeoutExpired:
             send_message({"type": "result", "status": "error", "detail": "Script timed out"})
@@ -793,7 +812,7 @@ def main():
             send_message({"type": "result", "status": "error", "detail": f"Script not found: {script_path}"})
         except Exception as e:
             send_message({"type": "result", "status": "error", "detail": str(e)})
-            debug_log(f"result (scan_pdf_dois): url={url} status=error detail={e}\n{traceback.format_exc()}")
+            debug_log(f"result (scan_pdf_dois): url={_redact_url_for_log(url)} status=error detail={e}\n{traceback.format_exc()}")
         return
 
     if "doi" not in message:

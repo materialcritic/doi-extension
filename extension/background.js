@@ -2056,7 +2056,13 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
         let cursor = 0;
         let done = 0;
 
-        const fetchOne = (entry, isRetry) =>
+        // attempt() is the retryable part; fetchOne() wraps exactly one
+        // top-level .finally() around the *whole* attempt-plus-retry chain,
+        // so a retried entry still only counts once toward `done` — nesting
+        // the retry as a separate fetchOne(entry, true) call used to give
+        // each attempt its own .finally(), double-counting (and
+        // double-reporting progress for) any entry that needed a retry.
+        const attempt = (entry, isRetry) =>
           fetch("https://api.crossref.org/works/" + encodeURIComponent(entry.doi))
             .then((r) => {
               if (!r.ok) throw new Error("status " + r.status);
@@ -2077,20 +2083,22 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
               entry.year = (dateParts && dateParts[0] && dateParts[0][0]) || null;
             })
             .catch((err) => {
-              if (!isRetry) return fetchOne(entry, true);
+              if (!isRetry) return attempt(entry, true);
               entry.title = entry.doi;
               entry.authors = [];
-            })
-            .finally(() => {
-              done += 1;
-              chrome.runtime.sendMessage({ action: "progress", line: `Fetching metadata… ${done}/${entries.length}` }, () => void chrome.runtime.lastError);
             });
+
+        const fetchOne = (entry) =>
+          attempt(entry, false).finally(() => {
+            done += 1;
+            chrome.runtime.sendMessage({ action: "progress", line: `Fetching metadata… ${done}/${entries.length}` }, () => void chrome.runtime.lastError);
+          });
 
         const worker = () => {
           if (cursor >= entries.length) return Promise.resolve();
           const entry = entries[cursor];
           cursor += 1;
-          return fetchOne(entry, false).then(worker);
+          return fetchOne(entry).then(worker);
         };
 
         const workers = new Array(Math.min(CONCURRENCY, entries.length)).fill(0).map(worker);
@@ -2519,7 +2527,11 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     let cursor = 0;
     let done = 0;
 
-    const fetchOne = (entry, isRetry) =>
+    // Same attempt()-wrapped-by-fetchOne() split as getBibliographyExport's
+    // backfill above, for the same reason: a single .finally() around the
+    // whole attempt-plus-retry chain, not one per attempt, so a retried
+    // entry doesn't double-count `done` and double-send its progress line.
+    const attempt = (entry, isRetry) =>
       // No `?select=` here -- unlike Crossref's search/listing endpoints
       // used elsewhere in this file, the single-work-by-DOI route rejects it
       // outright with a 400 ("This route does not support select"),
@@ -2546,19 +2558,21 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
           entry.citations = typeof (msg && msg["is-referenced-by-count"]) === "number" ? msg["is-referenced-by-count"] : null;
         })
         .catch((err) => {
-          if (!isRetry) return fetchOne(entry, true);
+          if (!isRetry) return attempt(entry, true);
           entry.error = true;
-        })
-        .finally(() => {
-          done += 1;
-          chrome.runtime.sendMessage({ action: "progress", line: `Fetching paper details… ${done}/${entries.length}` }, () => void chrome.runtime.lastError);
         });
+
+    const fetchOne = (entry) =>
+      attempt(entry, false).finally(() => {
+        done += 1;
+        chrome.runtime.sendMessage({ action: "progress", line: `Fetching paper details… ${done}/${entries.length}` }, () => void chrome.runtime.lastError);
+      });
 
     const worker = () => {
       if (cursor >= entries.length) return Promise.resolve();
       const entry = entries[cursor];
       cursor += 1;
-      return fetchOne(entry, false).then(worker);
+      return fetchOne(entry).then(worker);
     };
 
     const workers = new Array(Math.min(CONCURRENCY, entries.length)).fill(0).map(worker);
