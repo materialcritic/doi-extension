@@ -115,7 +115,17 @@ function flushLogEntries() {
 // place until the user happens to hit Clear Log themselves. Runs once per
 // bump of LOG_REDACTION_VERSION (onInstalled fires on every update, not
 // just a fresh install, which is what makes this reachable at all).
-const LOG_REDACTION_VERSION = 2;
+//
+// Bumped to 3: a real user's exported log showed the v2 redaction still
+// missed 651 raw occurrences of their OS username -- redactPath() was
+// anchored to the start of the string (so a path embedded mid-string, like
+// appendLog's "line" field, was never touched) and several real fields
+// (outputDirOverride, folder, a file:// URL's pathname) weren't on the
+// URL_KEYS/PATH_KEYS allowlist at all. redact.js now also applies a
+// non-anchored, global redactPath() pass to every string value as a
+// fallback, not just recognized keys, so this migration needs to re-run
+// once more against whatever's still sitting in storage from before that.
+const LOG_REDACTION_VERSION = 3;
 
 function migrateLogRedaction() {
   chrome.storage.local.get({ [LOG_STORAGE_KEY]: [], logRedactionVersion: 0 }, (res) => {
@@ -670,22 +680,31 @@ function getBadgeColors() {
   });
 }
 
+// The availability check that triggers a badge update can take a while
+// (mirror races/retries), so the tab it's for may already be closed by the
+// time this runs -- chrome.action.setBadgeText/setBadgeBackgroundColor
+// reject with "No tab with id: X" in that case (MV3's promise form, used
+// here since no callback is passed). Expected and harmless; a real user's
+// exported log showed ~90 pairs of these as unhandled-rejection noise
+// drowning out genuinely actionable errors, so swallow them the same way
+// chrome.runtime.lastError is swallowed elsewhere in this file for the
+// callback-style equivalent.
 function setAvailableBadge(tabId) {
-  chrome.action.setBadgeText({ tabId, text: "✓" });
+  chrome.action.setBadgeText({ tabId, text: "✓" }).catch(() => {});
   getBadgeColors().then((colors) => {
-    chrome.action.setBadgeBackgroundColor({ tabId, color: colors.ok });
+    chrome.action.setBadgeBackgroundColor({ tabId, color: colors.ok }).catch(() => {});
   });
 }
 
 function setUnavailableBadge(tabId) {
-  chrome.action.setBadgeText({ tabId, text: "✗" });
+  chrome.action.setBadgeText({ tabId, text: "✗" }).catch(() => {});
   getBadgeColors().then((colors) => {
-    chrome.action.setBadgeBackgroundColor({ tabId, color: colors.err });
+    chrome.action.setBadgeBackgroundColor({ tabId, color: colors.err }).catch(() => {});
   });
 }
 
 function clearBadge(tabId) {
-  chrome.action.setBadgeText({ tabId, text: "" });
+  chrome.action.setBadgeText({ tabId, text: "" }).catch(() => {});
 }
 
 function buildSearchQuery(title, authors) {
@@ -2018,6 +2037,16 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
   if (request.action === "getPaperOfTheDayHistory") {
     chrome.storage.local.get({ potdHistory: [] }, ({ potdHistory }) => {
       sendResponse({ success: true, history: potdHistory });
+    });
+    return true;
+  }
+
+  if (request.action === "clearPaperOfTheDayHistory") {
+    // Only the "Previously shown" list — deliberately leaves potdNonce
+    // alone, since that's what keeps today's own pick stable across popup/
+    // Settings reopens and isn't part of what "Clear History" describes.
+    chrome.storage.local.set({ potdHistory: [] }, () => {
+      sendResponse({ success: true });
     });
     return true;
   }

@@ -623,6 +623,7 @@ function loadPaperOfTheDay(refresh) {
 function loadPaperOfTheDayHistory() {
   const wrap = document.getElementById("potd-history-wrap");
   const list = document.getElementById("potd-history-list");
+  const summaryLabel = document.getElementById("potd-history-summary-label");
 
   chrome.runtime.sendMessage({ action: "getPaperOfTheDayHistory" }, (resp) => {
     if (!resp || !resp.success || !resp.history || resp.history.length === 0) {
@@ -631,6 +632,7 @@ function loadPaperOfTheDayHistory() {
     }
 
     wrap.style.display = "block";
+    summaryLabel.textContent = `Previously shown (${resp.history.length})`;
     list.innerHTML = "";
     resp.history.forEach((entry) => {
       const row = document.createElement("a");
@@ -653,6 +655,19 @@ function loadPaperOfTheDayHistory() {
     });
   });
 }
+
+document.getElementById("btn-clear-potd-history").addEventListener("click", () => {
+  if (!confirm("Clear the \"Previously shown\" history? This can't be undone.")) return;
+  const btn = document.getElementById("btn-clear-potd-history");
+  btn.disabled = true;
+  chrome.runtime.sendMessage({ action: "clearPaperOfTheDayHistory" }, () => {
+    btn.disabled = false;
+    // Collapses back to hidden (same as "no history yet") rather than
+    // leaving an empty, expanded panel sitting there.
+    document.getElementById("potd-history-wrap").style.display = "none";
+    document.getElementById("potd-history-list").innerHTML = "";
+  });
+});
 
 load();
 loadShortcuts();

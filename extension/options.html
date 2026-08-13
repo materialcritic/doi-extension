@@ -221,6 +221,31 @@
       flex-wrap: wrap;
     }
 
+    #potd-history-details summary {
+      list-style: none;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      font-size: 13px;
+      font-weight: 500;
+      color: var(--text);
+      user-select: none;
+    }
+
+    #potd-history-details summary::-webkit-details-marker { display: none; }
+
+    #potd-history-details summary .chevron {
+      color: var(--text-dim);
+      font-size: 11px;
+      transition: transform 0.15s;
+      flex-shrink: 0;
+    }
+
+    #potd-history-details[open] summary .chevron { transform: rotate(90deg); }
+
+    #potd-history-details #potd-history-list { margin-top: 12px; }
+
     button {
       padding: 9px 16px;
       border: none;
@@ -670,8 +695,16 @@
       </div>
 
       <div class="field" id="potd-history-wrap" style="display: none; margin-top: 22px;">
-        <label>Previously shown</label>
-        <div id="potd-history-list"></div>
+        <details id="potd-history-details">
+          <summary>
+            <span id="potd-history-summary-label">Previously shown</span>
+            <span class="chevron">▸</span>
+          </summary>
+          <div id="potd-history-list"></div>
+          <div class="actions" style="margin-top: 12px;">
+            <button id="btn-clear-potd-history" class="secondary">Clear History</button>
+          </div>
+        </details>
       </div>
     </section>
 

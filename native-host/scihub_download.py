@@ -688,6 +688,33 @@ class SciHubDownloader:
         """Print a machine-readable result line for the native host to parse"""
         print("RESULT:" + json.dumps({"status": status, **fields}), flush=True)
 
+    def _get_with_429_retry(self, url, max_retries=2, **kwargs):
+        """GET with a short backoff-and-retry specifically for 429 Too Many
+        Requests. Confirmed from a real user's exported log that a mirror's
+        file-serving backend (sci.bban.top) rate-limits hard during a fast
+        batch download -- this was by far the single largest cause of failed
+        downloads there (188 of 245 failures in that export, 77%), and the
+        actual file-download GET in download_pdf() had no retry of any kind
+        on a 429, unlike other 429-prone API calls elsewhere in this
+        codebase. Honors a Retry-After header when the server sends one
+        (capped at 30s so a large server-suggested delay can't stall a
+        download indefinitely); falls back to a fixed short delay otherwise.
+        Any other status is returned as-is for the caller's own
+        raise_for_status() to handle -- this only ever retries a 429."""
+        attempt = 0
+        while True:
+            response = self.session.get(url, **kwargs)
+            if response.status_code != 429 or attempt >= max_retries:
+                return response
+            retry_after = response.headers.get('Retry-After')
+            try:
+                delay = min(float(retry_after), 30) if retry_after else 5
+            except ValueError:
+                delay = 5
+            attempt += 1
+            print(f"Rate limited (429) — waiting {delay:.0f}s before retrying ({attempt}/{max_retries})...", flush=True)
+            time.sleep(delay)
+
     def scan_pdf_for_dois(self, url, max_dois=500):
         """Downloads the PDF at `url` into a temp file, extracts its text with
         pypdf, and regex-scans that text for every DOI-shaped token. Used by
@@ -813,7 +840,7 @@ class SciHubDownloader:
 
         try:
             self.log(f"Downloading from: {pdf_url}")
-            response = self.session.get(pdf_url, timeout=30, stream=True)
+            response = self._get_with_429_retry(pdf_url, timeout=30, stream=True)
             response.raise_for_status()
 
             # Check if it's actually a PDF
