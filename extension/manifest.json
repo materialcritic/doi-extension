@@ -19,6 +19,9 @@
     "https://pub.orcid.org/*",
     "https://www.gravatar.com/*"
   ],
+  "content_security_policy": {
+    "extension_pages": "script-src 'self'; object-src 'none'; base-uri 'none'"
+  },
   "options_page": "options.html",
   "omnibox": {
     "keyword": "doi"

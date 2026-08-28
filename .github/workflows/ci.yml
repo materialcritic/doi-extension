@@ -1,0 +1,70 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  python:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install dependencies
+        run: |
+          python3 -m pip install --upgrade pip
+          pip3 install -r native-host/requirements.txt
+          pip3 install pytest
+      - name: Compile-check both native-host scripts
+        run: |
+          python3 -m py_compile native-host/doi_host.py native-host/scihub_download.py
+      - name: Run tests
+        run: |
+          cd native-host && python3 -m pytest tests/ -v
+
+  extension:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Validate manifest.json is well-formed JSON
+        run: python3 -c "import json; json.load(open('extension/manifest.json')); print('OK')"
+      - uses: denoland/setup-deno@v1
+        with:
+          deno-version: v1.x
+      - name: Syntax-check every extension JS file
+        run: |
+          for f in extension/*.js; do
+            echo "Checking $f"
+            deno check "$f"
+          done
+
+  # Regression guard for a real bug that shipped once already: install.ps1
+  # used to write the generated Native Messaging manifest to a path inside
+  # the repo checkout that git also tracks (as a placeholder template),
+  # which made `git status` show it as permanently modified and broke
+  # self-update for every Windows user who ran the installer exactly per
+  # the README. This runs the real installer non-interactively and asserts
+  # the working tree stays clean afterward.
+  windows-installer-clean-tree:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Run install.ps1 with a fake (but validly-shaped) Extension ID
+        shell: pwsh
+        run: |
+          Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass
+          "abcdefghijklmnopabcdefghijklmnop" | .\native-host\install.ps1
+      - name: Assert the checkout is still clean
+        shell: pwsh
+        run: |
+          $status = git status --porcelain
+          if ($status) {
+            Write-Host "Working tree is dirty after running install.ps1:"
+            Write-Host $status
+            exit 1
+          }
+          Write-Host "OK: working tree is clean"

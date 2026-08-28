@@ -13,6 +13,7 @@ This is a **personal, single-machine tool** — it is not published on the Chrom
 ## Table of contents
 
 - [What it does](#what-it-does)
+- [Privacy](#privacy)
 - [How it's built](#how-its-built)
 - [Prerequisites](#prerequisites)
 - [Installation](#installation)
@@ -21,6 +22,7 @@ This is a **personal, single-machine tool** — it is not published on the Chrom
   - [3. Point the extension at your Python setup](#3-point-the-extension-at-your-python-setup)
   - [4. Try it](#4-try-it)
 - [Using the popup](#using-the-popup)
+- [Address bar search (omnibox)](#address-bar-search-omnibox)
 - [Keyboard shortcuts](#keyboard-shortcuts)
 - [The full-page tools](#the-full-page-tools)
   - [More by This Author](#more-by-this-author)
@@ -31,6 +33,7 @@ This is a **personal, single-machine tool** — it is not published on the Chrom
   - [Author Network Map](#author-network-map)
   - [Citation Snowball Graph](#citation-snowball-graph)
   - [Scan Page for DOIs](#scan-page-for-dois)
+  - [Trending in a Topic](#trending-in-a-topic)
 - [Settings page](#settings-page)
 - [Keeping it up to date](#keeping-it-up-to-date)
 - [Reporting a bug or requesting a feature](#reporting-a-bug-or-requesting-a-feature)
@@ -53,6 +56,16 @@ Open any academic paper's page (a journal site, a DOI resolver link, PhilPapers,
 4. If it's still unavailable, offers **fallbacks**: search Google for the title + author, search Google Scholar for the author, or (for SAGE papers specifically) jump straight to SAGE's own PDF viewer in case it's actually open-access.
 
 On top of the single-paper flow, it also has full pages for **bulk-downloading** an author's entire output, an entire journal issue, or an entire journal; browsing a paper's **references** and **citations**; finding **similar/related papers**; **watching** a journal or author for new releases; mapping out a **collaboration network** starting from a group of authors; **scanning a whole page (or an open PDF) for every DOI it mentions** and bulk-downloading a checklist of them; and **exporting** your download history as a citation file (BibTeX/RIS) or a full settings/history backup.
+
+## Privacy
+
+Worth being upfront about, since this runs continuously in the background:
+
+- **Every DOI the extension detects on a page you open is sent to Crossref** (and, for the "Cited By"/"Related Papers" popup panels, to Semantic Scholar; for abstracts, to OpenAlex; for a download attempt specifically, to Unpaywall as one of the fallback tiers) — that's how the availability badge and every metadata-backed feature work. In effect, that's a continuous disclosure of which academic papers you're looking at to those third parties, the same way any "look this up automatically" browser feature works. None of this is configurable off short of not using the extension; the trade-off is the whole point of the automatic badge.
+- **Content scripts run on every `http(s)://` page you visit** (`content.js`/`logger.js`/`redact.js`, per `manifest.json`'s broad `matches` pattern), not just recognized academic sites — this is what makes the automatic DOI detection and badge possible without you having to invoke the extension by hand on each page, but it does mean the extension's code executes in the context of every page you load, including ones unrelated to research (`host_permissions`, in contrast, is narrowly scoped to five specific API hosts — the extension can't just fetch arbitrary URLs from those content scripts).
+- **Diagnostic logging** (Settings → Diagnostics & Logs) records actions and errors locally in `chrome.storage.local` and `debug_log.txt` — never sent anywhere automatically, only read if you click Export Log. URLs and filesystem paths are redacted before being written (query strings/fragments stripped from URLs, the OS account name masked in paths) so an exported log is reasonably safe to attach to a bug report, but "reasonably safe" isn't a guarantee of zero sensitive content — skim an export yourself before sharing it if you're not sure what a given page's URL might have contained.
+- **The native host can read, write, and delete files on your machine** (gated by Chrome's Native Messaging `allowed_origins`, which pins it to only this one specific extension ID, plus its own path/interpreter validation — see `SECURITY.md`) — that's how downloading, reveal-in-Finder, and the corrupt-file cleanup button work.
+- **Nothing here is sent to the extension's author** — there's no telemetry, no analytics, no phone-home of any kind. The only outbound traffic is what's described above (Crossref/OpenAlex/Semantic Scholar/Unpaywall for metadata, Sci-Hub mirrors for the actual PDF), plus whatever you explicitly trigger yourself (opening a Google search, submitting a bug report).
 
 ## How it's built
 
@@ -227,7 +240,7 @@ If a later download fails with "native host has exited," see [Troubleshooting](#
 3. It will ask you to paste in the **Extension ID** from step 1 — paste it in and press Enter.
 4. You should see a short confirmation message and be back at the prompt.
 
-> **Note:** Windows support has been built and carefully reasoned through, but hasn't yet been verified step-by-step on a real Windows machine. If anything here doesn't match what you see, please [file a bug report](#reporting-a-bug-or-requesting-a-feature) with the exact error message — that's the fastest way to get it fixed for the next person.
+> **Note:** Windows support has had real hands-on testing (several genuine bugs were found and fixed this way — a PowerShell 5.1 parsing issue from non-ASCII characters, the Python interpreter auto-detect missing the `py` launcher's actual install locations, a hang caused by the `py` launcher being a wrapper process), but it's still less battle-tested than the macOS path overall. If anything here doesn't match what you see, please [file a bug report](#reporting-a-bug-or-requesting-a-feature) with the exact error message — that's the fastest way to get it fixed for the next person.
 
 </details>
 
@@ -281,6 +294,14 @@ Click the toolbar icon on any page with a detected DOI to get:
 | **Search Google Instead** | Opens a Google search for `<title> <author>` — always available, not just when unavailable. |
 | ⚙ (top right) | Opens Settings. |
 | ☀/🌙 (top right) | Quick-toggles between your last-picked light theme and Dark. |
+
+## Address bar search (omnibox)
+
+Type `doi` then <kbd>Space</kbd> in Chrome's address bar, then a paper's title, author, or a raw DOI, to search and download without visiting the paper's page at all:
+
+- Suggestions come from a live Crossref search (`query.bibliographic`) as you type, each showing the title plus a dimmed line of author/journal/year and — when Crossref has one — a snippet of the abstract.
+- Pasting or typing a DOI directly (instead of a title search) skips the Crossref lookup and offers a direct "Download DOI …" suggestion.
+- Pressing <kbd>Enter</kbd> on a suggestion (or on a freeform DOI/title with no suggestion picked) routes straight into the same `downloadDOI()` path as the toolbar button and <kbd>⌥D</kbd> — Sci-Hub → Unpaywall → publisher-page fallback, unchanged.
 
 ## Keyboard shortcuts
 
@@ -382,6 +403,14 @@ Reached from the popup's **Scan Page for DOIs** row (Explore tab — always enab
 - A DOI that Crossref can't find at all is flagged with a warning and **unchecked by default** rather than assumed downloadable — most commonly this means a PDF-text-extraction artifact truncated it (see [Known limitations](#known-limitations)), though very rarely it's just a real DOI Crossref hasn't indexed yet. You can still check it by hand if you want to try downloading it anyway.
 - Click any row's title to lazily fetch and show its abstract, same as the other bulk-download pages.
 
+### Trending in a Topic
+
+Reached from Settings → **Trending in a Topic** (its own tab, `trending.html`). Enter a topic (matched to an OpenAlex topic ID via a live search-as-you-type) and get a ranked list of recently-published papers in it — ranked by **citation velocity** (citations ÷ months since publication) by default, not raw citation count, so it surfaces work that's picking up attention *now* rather than all-time classics. A noise floor (papers younger than ~3 weeks, or with fewer than 3 citations) keeps a brand-new paper with 2 lucky citations from topping the list on a small-sample fluke.
+
+- **Window** (6/12/24 months) and **Rank by** (velocity / recent momentum / total citations) controls re-sort the same fetched pool instantly, without re-querying.
+- Downloads use the same batch machinery as every other bulk-download page — checklist, pause/cancel, progress bar, retry-failed.
+- **Follow This Topic** works like the Journal/Author watchlists: checks every 6 hours, notifies when a new paper enters the top 10 by velocity, opens straight to this page on click.
+
 ## Settings page
 
 Right-click the toolbar icon → **Options** (or click ⚙ in the popup):
@@ -391,15 +420,16 @@ Right-click the toolbar icon → **Options** (or click ⚙ in the popup):
 - **Connection** — output folder, Python interpreter path, script path, Sci-Hub mirror list, Unpaywall contact email (see [Installation](#3-point-the-extension-at-your-python-setup))
 - **Keyboard Shortcuts** — read-only view of the current Alt+D/Alt+F bindings, with a link to Chrome's remap page
 - **Popup Shortcuts** — reassign any of the single-key popup shortcuts
-- **Journal Watchlist** / **Author Watchlist** — manage what you're currently watching, with a manual "Check Now"
+- **Journal Watchlist** / **Author Watchlist** / **Topic Watchlist** — manage what you're currently watching, with a manual "Check Now" (Topic Watchlist is followed from [Trending in a Topic](#trending-in-a-topic)'s own page, not added directly here)
 - **Download Stats** — total-ever / last-7-weeks / last-7-months / last-year download counts
-- **Paper of the Day** — a deterministic daily pick from your download history, with a "Show Another" button and history list
+- **Paper of the Day** — a deterministic daily pick from your download history, with a "Show Another" button and a collapsible "Previously shown" history (with a Clear History button)
 - **Mirror Health** — per-mirror fail count, cooldown countdown, and a latency sparkline; per-mirror or global reset
 - **Updates** — check for and install new versions from GitHub; see [Keeping it up to date](#keeping-it-up-to-date)
 - **Backup & Support**:
   - **Export Everything** — bundles your settings, watchlists, download history, and mirror health into a downloadable `.zip`
   - **Import Backup** — restores settings, watchlists, download history, and mirror health from a zip created by Export Everything. Overwrites your current state, so use with care.
   - **Report a Bug/Feature Request** — see below
+- **Diagnostics & Logs** — every action and error, logged locally (see [Privacy](#privacy)); **Export Log** bundles it with the native host's own log and basic environment info (extension version, Chrome UA, platform, theme) into a `.zip` for a bug report; **Clear Log** wipes both sides.
 - **Citation Export** — builds a BibTeX or RIS file covering every paper you've successfully downloaded, with metadata fetched fresh from Crossref per paper (title/author/journal/year), for importing into Zotero, Mendeley, or another reference manager. Can take a while for a large library, since it's one lookup per paper.
 - **Citation Snowballing** — walk a seed paper's references and/or citations out several hops and browse the result as an interactive graph; see [Citation Snowball Graph](#citation-snowball-graph)
 
@@ -441,11 +471,16 @@ doi-extension/
 │   ├── search.html / search.js    # "Similar Papers" results page
 │   ├── network.html / network.js  # "Author Network Map" page
 │   ├── graph.html / graph.js      # "Citation Snowball Graph" page (opened from Settings)
+│   ├── snowball.html / snowball.js # Citation Snowballing run/results page (opens graph.html for the graph view)
+│   ├── trending.html / trending.js # "Trending in a Topic" page (opened from Settings)
 │   ├── page-scan.html/.js         # "Scan Page for DOIs" results page
 │   ├── report.html / report.js    # Bug/feature report form
 │   ├── theme.js                   # Shared 6-palette color theme system
 │   ├── shortcuts.js                # Shared popup-shortcut definitions
 │   ├── keywords.js                 # Shared keyword-extraction for "Find Similar"
+│   ├── logger.js                   # Shared diagnostic-logging client, loaded on every page + as a content script
+│   ├── redact.js                   # Shared log/URL/path redaction (usernames, query strings) before anything is persisted
+│   ├── path-utils.js               # Shared sanitizeFolderName()/joinOutputPath() for every bulk-download page
 │   ├── scihub-fullscreen.js       # Content script: auto-expands the PDF viewer on Sci-Hub mirrors
 │   ├── vendor/qrcode.js           # Vendored offline QR encoder
 │   ├── vendor/zipwriter.js        # Vendored zero-dependency ZIP reader/writer (Export Everything / Import Backup)
@@ -454,10 +489,17 @@ doi-extension/
 │   ├── doi_host.py                 # Native Messaging host — spawns scihub_download.py, streams
 │   │                               #   progress, handles reveal/delete/mirror-health/export actions
 │   ├── scihub_download.py         # The actual DOI → PDF downloader (Sci-Hub/Unpaywall/publisher)
-│   ├── com.doi_grabber.host.json  # Native Messaging manifest template (install.sh/install.ps1 fill this in)
+│   ├── requirements.txt           # requests/beautifulsoup4 (required); pypdf (optional — see Prerequisites)
+│   ├── tests/                     # pytest coverage for doi_host.py's pure functions (path/interpreter
+│   │                               #   validation, the native-message size guard, month arithmetic, etc.)
+│   ├── com.doi_grabber.host.json.template  # Native Messaging manifest template — install.sh/install.ps1
+│   │                               #   fill this in and write the real one OUTSIDE this checkout, never here
 │   ├── install.sh                  # Installer for macOS/Linux — registers the native host with Chrome
 │   ├── install.ps1                 # Installer for Windows — same, via the Windows Registry
 │   └── doi_host.bat                # Windows wrapper so Chrome can spawn doi_host.py as an executable
+├── .github/workflows/ci.yml       # Compile/syntax/test checks on every push, plus a regression guard for
+│                                   #   the install.ps1 tracked-file bug documented in Known limitations
+├── SECURITY.md                     # How this tool touches your filesystem, and how to report a vulnerability
 └── ...
 ```
 
@@ -467,11 +509,12 @@ doi-extension/
 - **Tandfonline and some other Cloudflare-protected publishers** return a bot-challenge page to any server-side fetch — their PDFs/abstracts can only be reached by a real browser tab, not the native host. The SAGE-specific "View Sage PDF" button works around this on the extension side; other publishers don't currently have an equivalent.
 - **Crossref's author search is relevance-ranked, not a guaranteed-complete filter** — even at the 1,000-result cap, an extremely prolific author's most obscure works could theoretically be missed. There's no "everything by this ORCID" endpoint without a known ORCID iD.
 - Requires **restarting Chrome** (not just reloading the extension) after any change to `doi_host.py` or `scihub_download.py`, since the native host is a separate long-lived process.
-- **Windows support has had one round of real hands-on testing** (a genuine `install.ps1` parse bug was found and fixed as a result — see [Troubleshooting](#troubleshooting)), but is still far less battle-tested than the macOS path.
+- **Windows support has had several rounds of real hands-on testing** (genuine bugs found and fixed as a result — see the note in [step 2 of installation](#2-install-the-native-messaging-host)), but is still less battle-tested than the macOS path overall.
 - On Linux, "Reveal in Finder" falls back to just opening the containing folder (via `xdg-open`) rather than selecting the file within it — there's no single standard way to select a specific file across Linux file managers the way `open -R`/`explorer /select,` do on macOS/Windows.
 - **Self-update only supports a clean fast-forward** — if you've made local edits to the code, or your branch has diverged from `origin` for any other reason, "Update Now" will refuse rather than merge/rebase automatically. Commit, stash, or reset your changes first, then update.
 - **Scan Page for DOIs on a PDF can come back with truncated DOIs on some PDFs** — confirmed live against a real PLOS ONE article: `pypdf`'s text extraction occasionally injects a stray space or newline in the middle of a word (a font/kerning quirk affecting the whole document's text, not something specific to DOIs), which can chop a DOI short (e.g. `10.1371/journal.pone.0270949` coming back as `10.1371/j`). Not silently guessed at — a DOI Crossref can't find at all is flagged and left unchecked by default, but a real DOI could in principle also get a false "not found" flag this way. Only ever affects the PDF path, not regular web pages.
 - **Scan Page for DOIs only detects a PDF tab by its URL ending in `.pdf`** — a PDF served without that extension (uncommon, but it happens) is instead scanned like a regular web page, which will find nothing since Chrome's PDF viewer has no readable page text for a content script to see.
+- **The configured Unpaywall/Crossref contact email is only sent on the highest-volume Crossref calls** (References, Scan Page for DOIs, Paper of the Day, Citation Export, and Citation Snowballing) for Crossref's better-rate-limit "polite pool" — not yet threaded through every single Crossref call in the codebase (a handful of one-off lookups, like author searches and the omnibox, still call Crossref anonymously). Those calls all still work fine either way; this only affects how generously Crossref rate-limits them.
 
 ## Troubleshooting
 
@@ -482,7 +525,7 @@ doi-extension/
 **"Native host has exited" / download does nothing:**
 - **macOS, repo lives under `~/Downloads`/`~/Desktop`/`~/Documents`:** these are TCC-protected folders — macOS can silently block Chrome from *executing* `doi_host.py` out of one, with no prompt and no useful error. Move the whole repo somewhere else (e.g. `~/doi-extension`), update the `path` in `~/Library/Application Support/Google/Chrome/NativeMessagingHosts/com.doi_grabber.host.json` (or just re-run `./install.sh` from the new location), and fully restart Chrome. This is the most common cause if *every* native-host action fails identically (mirror health, download stats, updates, downloads — not just one feature).
 - **macOS, quarantine flag:** check `doi_host.py` doesn't have a `com.apple.quarantine` extended attribute: `xattr -l native-host/doi_host.py`. If it does, `xattr -d com.apple.quarantine native-host/doi_host.py`.
-- **Windows:** confirm `doi_host.bat`'s path in `com.doi_grabber.host.json` matches where you actually placed `native-host/`, and that either the `py` launcher or `python` is on your PATH (`py --version` or `python --version` in PowerShell).
+- **Windows:** the generated manifest lives at `%LOCALAPPDATA%\doi-grabber\com.doi_grabber.host.json` (not inside the repo checkout) — confirm `doi_host.bat`'s `path` value there matches where you actually placed `native-host/`, and that either the `py` launcher or `python` is on your PATH (`py --version` or `python --version` in PowerShell). If you installed before this path changed, re-run `.\install.ps1` once to regenerate it in the new location.
 - Make sure you fully restarted Chrome after installing/editing the native host, not just reloaded the extension.
 - If you moved the extension's *own* folder (not just `native-host/`) to a new path, its ID changes too (unpacked extensions with no `"key"` in `manifest.json` get an ID derived from their absolute path) — you'll need to update `allowed_origins` in `com.doi_grabber.host.json` to the new ID as well.
 

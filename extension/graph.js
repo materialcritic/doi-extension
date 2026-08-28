@@ -1,4 +1,14 @@
 (function () {
+  // Was wired via an inline onclick="toggleTheme()" attribute, which MV3's
+  // (non-relaxable) default extension-page CSP has always blocked -- inline
+  // event-handler attributes count as inline script, same as an inline
+  // <script> block, and script-src 'self' with no 'unsafe-inline' rejects
+  // both. Every other themed page in this codebase already wires this via
+  // addEventListener (see page-scan.js/journal-download.js) — this page and
+  // snowball.html were the two that never got that treatment, so their
+  // theme-toggle button has been a dead click since MV3 day one.
+  document.getElementById("btn-theme-toggle")?.addEventListener("click", () => window.toggleTheme());
+
   const svg = document.getElementById("svg");
   const vp = document.getElementById("vp");
   const tip = document.getElementById("tip");

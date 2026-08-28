@@ -1,5 +1,16 @@
 (function () {
   const $ = (id) => document.getElementById(id);
+
+  // Was wired via an inline onclick="toggleTheme()" attribute, which MV3's
+  // (non-relaxable) default extension-page CSP has always blocked -- inline
+  // event-handler attributes count as inline script, same as an inline
+  // <script> block, and script-src 'self' with no 'unsafe-inline' rejects
+  // both. Every other themed page in this codebase already wires this via
+  // addEventListener (see page-scan.js/journal-download.js) — this page and
+  // graph.html were the two that never got that treatment, so their
+  // theme-toggle button has been a dead click since MV3 day one.
+  $("btn-theme-toggle")?.addEventListener("click", () => window.toggleTheme());
+
   const runDesc = $("run-desc");
   const statusText = $("status-text");
   const statusSub = $("status-sub");
@@ -104,7 +115,12 @@
       row.className = "row";
       const left = document.createElement("div");
       left.className = "row-title";
-      left.innerHTML = '<span class="row-tag">[' + r.via + " · hop " + r.depth + "]</span> " + (r.title ? esc(r.title) : r.doi);
+      // r.via/r.depth are internally generated (never attacker-controlled),
+      // but r.doi — used here whenever there's no title — comes straight
+      // from Crossref/OpenAlex response data. Escaping all three costs
+      // nothing and removes the need for a reader to trace where each one
+      // came from to know whether it's safe.
+      left.innerHTML = '<span class="row-tag">[' + esc(r.via) + " · hop " + esc(r.depth) + "]</span> " + (r.title ? esc(r.title) : esc(r.doi));
       const a = document.createElement("a");
       a.href = "https://doi.org/" + r.doi;
       a.textContent = r.doi;

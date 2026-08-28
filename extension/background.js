@@ -350,7 +350,7 @@ chrome.notifications.onClicked.addListener((notifId) => {
 function fetchLatestIssue(issn) {
   const url = `https://api.crossref.org/journals/${encodeURIComponent(issn)}/works` +
     `?rows=1&sort=published&order=desc&select=volume,issue,published-print,published-online`;
-  return fetch(url)
+  return fetchWithTimeout(url)
     .then((r) => {
       if (!r.ok) throw new Error("Crossref lookup failed (" + r.status + ")");
       return r.json();
@@ -430,7 +430,7 @@ function fetchLatestAuthorWork(author) {
   const url = "https://api.crossref.org/works?query.author=" +
     encodeURIComponent(author || "") + "&rows=5&sort=published&order=desc&select=DOI,title,author,published-print,published-online";
 
-  return fetch(url)
+  return fetchWithTimeout(url)
     .then((r) => {
       if (!r.ok) throw new Error("Crossref lookup failed (" + r.status + ")");
       return r.json();
@@ -522,7 +522,7 @@ function fetchTrendingWorks(topicFilter, windowMonths) {
     "&sort=cited_by_count:desc&per_page=" + TRENDING_CANDIDATE_POOL +
     "&select=id,doi,title,publication_date,publication_year,cited_by_count,counts_by_year,primary_location,type,abstract_inverted_index";
 
-  return fetch(url)
+  return fetchWithTimeout(url)
     .then((r) => {
       if (!r.ok) throw new Error("OpenAlex lookup failed (" + r.status + ")");
       return r.json();
@@ -740,6 +740,30 @@ function reconstructOpenAlexAbstract(invertedIndex) {
   if (/^Click to increase image size/i.test(text)) return null;
 
   return text;
+}
+
+// This file makes ~29 fetchWithTimeout() calls to Crossref/OpenAlex/Semantic Scholar/
+// Unpaywall, almost all with no timeout at all -- a hung connection to any
+// of them previously left a batch (or the throttled 3-at-a-time queue used
+// across most bulk-download pages) stalled indefinitely with no
+// user-visible cause, and three simultaneously-hung requests would block
+// the whole queue. Every fetchWithTimeout() in this file should go through this
+// instead. Composes correctly with a caller-supplied opts.signal (only
+// fetchOmniboxSuggestions has one, for cancel-on-next-keystroke) via
+// AbortSignal.any() rather than overwriting it -- a plain
+// `{...opts, signal: timeoutSignal}` would otherwise silently drop the
+// caller's own cancellation.
+const FETCH_TIMEOUT_MS = 15000;
+
+async function fetchWithTimeout(url, opts = {}, ms = FETCH_TIMEOUT_MS) {
+  const timeoutCtrl = new AbortController();
+  const timer = setTimeout(() => timeoutCtrl.abort(), ms);
+  const signal = opts.signal ? AbortSignal.any([opts.signal, timeoutCtrl.signal]) : timeoutCtrl.signal;
+  try {
+    return await fetch(url, { ...opts, signal });
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 // Crossref's metadata (titles, journal/container-title, author names) often
@@ -1029,7 +1053,7 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     const url = "https://api.crossref.org/works?query.author=" +
       encodeURIComponent(request.author || "") + "&rows=1000&select=DOI,title,author,container-title,published-print,published-online,type,is-referenced-by-count,abstract";
 
-    fetch(url)
+    fetchWithTimeout(url)
       .then((r) => {
         if (!r.ok) throw new Error("Crossref lookup failed (" + r.status + ")");
         return r.json();
@@ -1086,7 +1110,7 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     // calls below (getCitedBy/getRelatedPapers) — applied here to every
     // remote call this handler makes (ORCID, Gravatar), not just S2.
     const fetchWithRetry = (url, options, isRetry) =>
-      fetch(url, options).then((r) => {
+      fetchWithTimeout(url, options).then((r) => {
         if (r.status === 429 && !isRetry) {
           return new Promise((resolve) => setTimeout(resolve, 2000)).then(() => fetchWithRetry(url, options, true));
         }
@@ -1156,7 +1180,7 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
   if (request.action === "getIssueInfo") {
     getCachedMetadata("getIssueInfo", request.doi).then((cached) => {
       if (cached !== undefined) { sendResponse(cached); return; }
-      fetch("https://api.crossref.org/works/" + encodeURIComponent(request.doi))
+      fetchWithTimeout("https://api.crossref.org/works/" + encodeURIComponent(request.doi))
         .then((r) => {
           if (!r.ok) throw new Error("Crossref lookup failed (" + r.status + ")");
           return r.json();
@@ -1196,7 +1220,7 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     const url = `https://api.crossref.org/journals/${encodeURIComponent(request.issn)}/works` +
       `?rows=1000&select=DOI,title,author,page,is-referenced-by-count,type,volume,issue,abstract${yearFilter}`;
 
-    fetch(url)
+    fetchWithTimeout(url)
       .then((r) => {
         if (!r.ok) throw new Error("Crossref lookup failed (" + r.status + ")");
         return r.json();
@@ -1243,7 +1267,7 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
           // lazily per-article instead, via the "getWorkAbstract" action below.
           const url = `https://api.crossref.org/journals/${encodeURIComponent(request.issn)}/works` +
             `?rows=1000&cursor=${encodeURIComponent(cursor)}&select=DOI,title,author,page,is-referenced-by-count,type,volume,issue,published-print,published-online`;
-          const r = await fetch(url);
+          const r = await fetchWithTimeout(url);
           if (!r.ok) throw new Error("Crossref lookup failed (" + r.status + ")");
           const data = await r.json();
           const msg = data.message || {};
@@ -1289,7 +1313,7 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     // etc.) — a transient issue on one source shouldn't sink the whole
     // lookup, so that failure is swallowed here rather than left to the
     // outer .catch, which is reserved for the final (Crossref) attempt.
-    fetch("https://api.openalex.org/works/doi:" + encodeURIComponent(request.doi))
+    fetchWithTimeout("https://api.openalex.org/works/doi:" + encodeURIComponent(request.doi))
       .then((r) => (r.ok ? r.json() : null))
       .then((data) => reconstructOpenAlexAbstract(data && data.abstract_inverted_index))
       .catch(() => null)
@@ -1298,7 +1322,7 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
           sendResponse({ success: true, abstract });
           return;
         }
-        return fetch("https://api.crossref.org/works/" + encodeURIComponent(request.doi))
+        return fetchWithTimeout("https://api.crossref.org/works/" + encodeURIComponent(request.doi))
           .then((r) => (r.ok ? r.json() : null))
           .then((data) => {
             const abstract = stripJatsAbstract(data && data.message && data.message.abstract);
@@ -1323,7 +1347,7 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
       `&query=${encodeURIComponent(request.query || "")}&rows=50&offset=${offset}` +
       `&select=DOI,title,author,volume,issue,is-referenced-by-count,abstract,published-print,published-online`;
 
-    fetch(url)
+    fetchWithTimeout(url)
       .then((r) => {
         if (!r.ok) throw new Error("Crossref lookup failed (" + r.status + ")");
         return r.json();
@@ -1360,7 +1384,7 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
       encodeURIComponent(request.query || "") +
       "&rows=30&select=DOI,title,author,container-title,published-print,published-online,type,is-referenced-by-count,abstract";
 
-    fetch(url)
+    fetchWithTimeout(url)
       .then((r) => {
         if (!r.ok) throw new Error("Crossref lookup failed (" + r.status + ")");
         return r.json();
@@ -1474,7 +1498,7 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     // Autocomplete for the settings card — OpenAlex topics search.
     const url = "https://api.openalex.org/topics?search=" + encodeURIComponent(request.query || "") +
       "&per-page=8&select=id,display_name,description";
-    fetch(url)
+    fetchWithTimeout(url)
       .then((r) => (r.ok ? r.json() : Promise.reject(new Error("OpenAlex topics lookup failed (" + r.status + ")"))))
       .then((data) => {
         const topics = (data.results || []).map((t) => ({
@@ -1548,7 +1572,7 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     const url = "https://api.crossref.org/works?query.author=" +
       encodeURIComponent(request.author || "") + "&rows=1000&select=DOI,author";
 
-    fetch(url)
+    fetchWithTimeout(url)
       .then((r) => {
         if (!r.ok) throw new Error("Crossref lookup failed (" + r.status + ")");
         return r.json();
@@ -1617,7 +1641,7 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     const url = "https://api.openalex.org/authors?search=" + encodeURIComponent(request.author || "") +
       "&per-page=1&select=id,display_name,works_count,cited_by_count";
 
-    fetch(url)
+    fetchWithTimeout(url)
       .then((r) => {
         if (!r.ok) throw new Error("OpenAlex lookup failed (" + r.status + ")");
         return r.json();
@@ -1656,7 +1680,7 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
       encodeURIComponent(request.authorA || "") +
       "&rows=1000&select=DOI,title,author,published-print,published-online";
 
-    fetch(url)
+    fetchWithTimeout(url)
       .then((r) => {
         if (!r.ok) throw new Error("Crossref lookup failed (" + r.status + ")");
         return r.json();
@@ -1738,67 +1762,70 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
   }
 
   if (request.action === "getReferences") {
-    getCachedMetadata("getReferences", request.doi).then((cached) => {
-      if (cached !== undefined) { sendResponse(cached); return; }
-    fetch("https://api.crossref.org/works/" + encodeURIComponent(request.doi))
-      .then((r) => {
-        if (!r.ok) throw new Error("Crossref lookup failed (" + r.status + ")");
-        return r.json();
-      })
-      .then((data) => {
-        const refs = (data.message && data.message.reference) || [];
-        return refs.filter((r) => r.DOI).map((r) => ({
-          doi: r.DOI,
-          title: decodeHtmlEntities(r["article-title"] || r.unstructured || "") || null,
-        }));
-      })
-      .then((withDOI) => {
-        // Many publishers only assert the reference's DOI, with no title —
-        // fetch each of those individually to fill in a real title/author.
-        // Crossref rate-limits bursts, so these are throttled (3 at a time,
-        // one retry on failure) rather than fired all at once — a bare
-        // `Promise.all` here was silently losing a few to 429s.
-        const needsFetch = withDOI.filter((ref) => !ref.title);
-        const CONCURRENCY = 3;
-        let cursor = 0;
+    getSettings().then((settings) => {
+      const mailto = settings.unpaywallEmail || "";
+      getCachedMetadata("getReferences", request.doi).then((cached) => {
+        if (cached !== undefined) { sendResponse(cached); return; }
+        fetchWithTimeout(crossrefUrl("https://api.crossref.org/works/" + encodeURIComponent(request.doi), mailto))
+          .then((r) => {
+            if (!r.ok) throw new Error("Crossref lookup failed (" + r.status + ")");
+            return r.json();
+          })
+          .then((data) => {
+            const refs = (data.message && data.message.reference) || [];
+            return refs.filter((r) => r.DOI).map((r) => ({
+              doi: r.DOI,
+              title: decodeHtmlEntities(r["article-title"] || r.unstructured || "") || null,
+            }));
+          })
+          .then((withDOI) => {
+            // Many publishers only assert the reference's DOI, with no title —
+            // fetch each of those individually to fill in a real title/author.
+            // Crossref rate-limits bursts, so these are throttled (3 at a time,
+            // one retry on failure) rather than fired all at once — a bare
+            // `Promise.all` here was silently losing a few to 429s.
+            const needsFetch = withDOI.filter((ref) => !ref.title);
+            const CONCURRENCY = 3;
+            let cursor = 0;
 
-        const fetchOne = (ref, isRetry) =>
-          fetch("https://api.crossref.org/works/" + encodeURIComponent(ref.doi))
-            .then((r) => {
-              if (!r.ok) throw new Error("status " + r.status);
-              return r.json();
-            })
-            .then((data) => {
-              const msg = data && data.message;
-              const title = msg && msg.title && msg.title[0];
-              const author = msg && msg.author && msg.author[0];
-              const authorName = author && (author.family || author.name);
-              ref.title = title
-                ? (authorName ? `${title} — ${authorName}` : title)
-                : ref.doi;
-            })
-            .catch((err) => {
-              if (!isRetry) return fetchOne(ref, true);
-              ref.title = ref.doi;
-            });
+            const fetchOne = (ref, isRetry) =>
+              fetchWithTimeout(crossrefUrl("https://api.crossref.org/works/" + encodeURIComponent(ref.doi), mailto))
+                .then((r) => {
+                  if (!r.ok) throw new Error("status " + r.status);
+                  return r.json();
+                })
+                .then((data) => {
+                  const msg = data && data.message;
+                  const title = msg && msg.title && msg.title[0];
+                  const author = msg && msg.author && msg.author[0];
+                  const authorName = author && (author.family || author.name);
+                  ref.title = title
+                    ? (authorName ? `${title} — ${authorName}` : title)
+                    : ref.doi;
+                })
+                .catch((err) => {
+                  if (!isRetry) return fetchOne(ref, true);
+                  ref.title = ref.doi;
+                });
 
-        const worker = () => {
-          if (cursor >= needsFetch.length) return Promise.resolve();
-          const ref = needsFetch[cursor];
-          cursor += 1;
-          return fetchOne(ref, false).then(worker);
-        };
+            const worker = () => {
+              if (cursor >= needsFetch.length) return Promise.resolve();
+              const ref = needsFetch[cursor];
+              cursor += 1;
+              return fetchOne(ref, false).then(worker);
+            };
 
-        const workers = new Array(Math.min(CONCURRENCY, needsFetch.length)).fill(0).map(worker);
-        return Promise.all(workers).then(() => withDOI);
-      })
-      .then((references) => {
-        const resp = { success: true, references };
-        setCachedMetadata("getReferences", request.doi, resp);
-        sendResponse(resp);
-      })
-      .catch((err) => {
-        sendResponse({ success: false, error: err.message });
+            const workers = new Array(Math.min(CONCURRENCY, needsFetch.length)).fill(0).map(worker);
+            return Promise.all(workers).then(() => withDOI);
+          })
+          .then((references) => {
+            const resp = { success: true, references };
+            setCachedMetadata("getReferences", request.doi, resp);
+            sendResponse(resp);
+          })
+          .catch((err) => {
+            sendResponse({ success: false, error: err.message });
+          });
       });
     });
     return true;
@@ -1817,7 +1844,7 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     // one retry after a short wait on a 429 before giving up, same pattern
     // as the Crossref reference-title backfill above.
     const fetchWithRetry = (isRetry) =>
-      fetch(url).then((r) => {
+      fetchWithTimeout(url).then((r) => {
         if (r.status === 429 && !isRetry) {
           return new Promise((resolve) => setTimeout(resolve, 2000)).then(() => fetchWithRetry(true));
         }
@@ -1862,7 +1889,7 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
       encodeURIComponent(request.doi) + "?fields=title,externalIds,authors,year&limit=20";
 
     const fetchWithRetry = (isRetry) =>
-      fetch(url).then((r) => {
+      fetchWithTimeout(url).then((r) => {
         if (r.status === 429 && !isRetry) {
           return new Promise((resolve) => setTimeout(resolve, 2000)).then(() => fetchWithRetry(true));
         }
@@ -1996,7 +2023,7 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
           const mirror = (settings.mirrors && settings.mirrors[0]) || "https://sci-hub.se";
           const url = mirror.replace(/\/+$/, "") + "/" + pick.doi;
 
-          return fetch("https://api.crossref.org/works/" + encodeURIComponent(pick.doi))
+          return fetchWithTimeout(crossrefUrl("https://api.crossref.org/works/" + encodeURIComponent(pick.doi), settings.unpaywallEmail))
             .then((r) => (r.ok ? r.json() : null))
             .then((data) => {
               const msg = data && data.message;
@@ -2074,8 +2101,9 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
 
     port.postMessage({ action: "recent_downloads", limit: 100000 });
 
-    nativeResult
-      .then((message) => {
+    Promise.all([nativeResult, getSettings()])
+      .then(([message, settings]) => {
+        const mailto = settings.unpaywallEmail || "";
         if (message.status !== "ok") throw new Error(message.detail || "Couldn't read the download log");
         const downloads = message.downloads || [];
         if (downloads.length === 0) return [];
@@ -2092,7 +2120,7 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
         // each attempt its own .finally(), double-counting (and
         // double-reporting progress for) any entry that needed a retry.
         const attempt = (entry, isRetry) =>
-          fetch("https://api.crossref.org/works/" + encodeURIComponent(entry.doi))
+          fetchWithTimeout(crossrefUrl("https://api.crossref.org/works/" + encodeURIComponent(entry.doi), mailto))
             .then((r) => {
               if (!r.ok) throw new Error("status " + r.status);
               return r.json();
@@ -2329,92 +2357,106 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
   }
 
   if (request.action === "openFolder") {
-    const port = chrome.runtime.connectNative(NATIVE_HOST);
+    // settings (specifically outputDir) is passed through so the native
+    // host can validate this path actually sits under the configured
+    // output folder before touching the filesystem, rather than trusting
+    // whatever path arrives — see _validate_path() in doi_host.py.
+    getSettings().then((settings) => {
+      const port = chrome.runtime.connectNative(NATIVE_HOST);
 
-    port.onMessage.addListener((message) => {
-      if (message.type === "progress") return;
-      sendResponse({ success: message.status === "ok", error: message.detail });
-      port.disconnect();
+      port.onMessage.addListener((message) => {
+        if (message.type === "progress") return;
+        sendResponse({ success: message.status === "ok", error: message.detail });
+        port.disconnect();
+      });
+
+      port.onDisconnect.addListener(() => {
+        const err = chrome.runtime.lastError;
+        if (err) sendResponse({ success: false, error: err.message });
+      });
+
+      port.postMessage({ action: "open_folder", folder: request.folder, settings });
     });
-
-    port.onDisconnect.addListener(() => {
-      const err = chrome.runtime.lastError;
-      if (err) sendResponse({ success: false, error: err.message });
-    });
-
-    port.postMessage({ action: "open_folder", folder: request.folder });
     return true;
   }
 
   if (request.action === "readLog") {
-    const port = chrome.runtime.connectNative(NATIVE_HOST);
+    getSettings().then((settings) => {
+      const port = chrome.runtime.connectNative(NATIVE_HOST);
 
-    port.onMessage.addListener((message) => {
-      if (message.type === "progress") return;
-      sendResponse({ success: message.status === "ok", content: message.content, error: message.detail });
-      port.disconnect();
+      port.onMessage.addListener((message) => {
+        if (message.type === "progress") return;
+        sendResponse({ success: message.status === "ok", content: message.content, error: message.detail });
+        port.disconnect();
+      });
+
+      port.onDisconnect.addListener(() => {
+        const err = chrome.runtime.lastError;
+        if (err) sendResponse({ success: false, error: err.message });
+      });
+
+      port.postMessage({ action: "read_log", filepath: request.filepath, settings });
     });
-
-    port.onDisconnect.addListener(() => {
-      const err = chrome.runtime.lastError;
-      if (err) sendResponse({ success: false, error: err.message });
-    });
-
-    port.postMessage({ action: "read_log", filepath: request.filepath });
     return true;
   }
 
   if (request.action === "appendLog") {
-    const port = chrome.runtime.connectNative(NATIVE_HOST);
+    getSettings().then((settings) => {
+      const port = chrome.runtime.connectNative(NATIVE_HOST);
 
-    port.onMessage.addListener((message) => {
-      if (message.type === "progress") return;
-      sendResponse({ success: message.status === "ok", error: message.detail });
-      port.disconnect();
+      port.onMessage.addListener((message) => {
+        if (message.type === "progress") return;
+        sendResponse({ success: message.status === "ok", error: message.detail });
+        port.disconnect();
+      });
+
+      port.onDisconnect.addListener(() => {
+        const err = chrome.runtime.lastError;
+        if (err) sendResponse({ success: false, error: err.message });
+      });
+
+      port.postMessage({ action: "append_log", filepath: request.filepath, line: request.line, settings });
     });
-
-    port.onDisconnect.addListener(() => {
-      const err = chrome.runtime.lastError;
-      if (err) sendResponse({ success: false, error: err.message });
-    });
-
-    port.postMessage({ action: "append_log", filepath: request.filepath, line: request.line });
     return true;
   }
 
   if (request.action === "deleteFile") {
-    const port = chrome.runtime.connectNative(NATIVE_HOST);
+    getSettings().then((settings) => {
+      const port = chrome.runtime.connectNative(NATIVE_HOST);
 
-    port.onMessage.addListener((message) => {
-      if (message.type === "progress") return;
-      sendResponse({ success: message.status === "ok", error: message.detail });
-      port.disconnect();
+      port.onMessage.addListener((message) => {
+        if (message.type === "progress") return;
+        sendResponse({ success: message.status === "ok", error: message.detail });
+        port.disconnect();
+      });
+
+      port.onDisconnect.addListener(() => {
+        const err = chrome.runtime.lastError;
+        if (err) sendResponse({ success: false, error: err.message });
+      });
+
+      port.postMessage({ action: "delete_file", filepath: request.filepath, settings });
     });
-
-    port.onDisconnect.addListener(() => {
-      const err = chrome.runtime.lastError;
-      if (err) sendResponse({ success: false, error: err.message });
-    });
-
-    port.postMessage({ action: "delete_file", filepath: request.filepath });
     return true;
   }
 
   if (request.action === "revealFile") {
-    const port = chrome.runtime.connectNative(NATIVE_HOST);
+    getSettings().then((settings) => {
+      const port = chrome.runtime.connectNative(NATIVE_HOST);
 
-    port.onMessage.addListener((message) => {
-      if (message.type === "progress") return;
-      sendResponse({ success: message.status === "ok", error: message.detail });
-      port.disconnect();
+      port.onMessage.addListener((message) => {
+        if (message.type === "progress") return;
+        sendResponse({ success: message.status === "ok", error: message.detail });
+        port.disconnect();
+      });
+
+      port.onDisconnect.addListener(() => {
+        const err = chrome.runtime.lastError;
+        if (err) sendResponse({ success: false, error: err.message });
+      });
+
+      port.postMessage({ action: "reveal", filepath: request.filepath, settings });
     });
-
-    port.onDisconnect.addListener(() => {
-      const err = chrome.runtime.lastError;
-      if (err) sendResponse({ success: false, error: err.message });
-    });
-
-    port.postMessage({ action: "reveal", filepath: request.filepath });
     return true;
   }
 
@@ -2556,57 +2598,61 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     let cursor = 0;
     let done = 0;
 
-    // Same attempt()-wrapped-by-fetchOne() split as getBibliographyExport's
-    // backfill above, for the same reason: a single .finally() around the
-    // whole attempt-plus-retry chain, not one per attempt, so a retried
-    // entry doesn't double-count `done` and double-send its progress line.
-    const attempt = (entry, isRetry) =>
-      // No `?select=` here -- unlike Crossref's search/listing endpoints
-      // used elsewhere in this file, the single-work-by-DOI route rejects it
-      // outright with a 400 ("This route does not support select"),
-      // confirmed live. Fetches the full work object instead, same as
-      // getBibliographyExport's identical-shaped backfill.
-      fetch("https://api.crossref.org/works/" + encodeURIComponent(entry.doi))
-        .then((r) => {
-          if (r.status === 404) {
-            entry.notFound = true;
-            return null;
-          }
-          if (!r.ok) throw new Error("status " + r.status);
-          return r.json();
-        })
-        .then((data) => {
-          if (!data) return;
-          const msg = data.message;
-          entry.title = decodeHtmlEntities((msg && msg.title && msg.title[0]) || "") || null;
-          const authors = ((msg && msg.author) || []).map((a) => decodeHtmlEntities([a.given, a.family].filter(Boolean).join(" ")));
-          entry.author = authors.join(", ");
-          entry.journal = decodeHtmlEntities((msg && msg["container-title"] && msg["container-title"][0]) || "");
-          const dateParts = (msg && (msg["published-print"] || msg["published-online"]) || {})["date-parts"];
-          entry.year = (dateParts && dateParts[0] && dateParts[0][0]) || null;
-          entry.citations = typeof (msg && msg["is-referenced-by-count"]) === "number" ? msg["is-referenced-by-count"] : null;
-        })
-        .catch((err) => {
-          if (!isRetry) return attempt(entry, true);
-          entry.error = true;
+    getSettings().then((settings) => {
+      const mailto = settings.unpaywallEmail || "";
+
+      // Same attempt()-wrapped-by-fetchOne() split as getBibliographyExport's
+      // backfill above, for the same reason: a single .finally() around the
+      // whole attempt-plus-retry chain, not one per attempt, so a retried
+      // entry doesn't double-count `done` and double-send its progress line.
+      const attempt = (entry, isRetry) =>
+        // No `?select=` here -- unlike Crossref's search/listing endpoints
+        // used elsewhere in this file, the single-work-by-DOI route rejects it
+        // outright with a 400 ("This route does not support select"),
+        // confirmed live. Fetches the full work object instead, same as
+        // getBibliographyExport's identical-shaped backfill.
+        fetchWithTimeout(crossrefUrl("https://api.crossref.org/works/" + encodeURIComponent(entry.doi), mailto))
+          .then((r) => {
+            if (r.status === 404) {
+              entry.notFound = true;
+              return null;
+            }
+            if (!r.ok) throw new Error("status " + r.status);
+            return r.json();
+          })
+          .then((data) => {
+            if (!data) return;
+            const msg = data.message;
+            entry.title = decodeHtmlEntities((msg && msg.title && msg.title[0]) || "") || null;
+            const authors = ((msg && msg.author) || []).map((a) => decodeHtmlEntities([a.given, a.family].filter(Boolean).join(" ")));
+            entry.author = authors.join(", ");
+            entry.journal = decodeHtmlEntities((msg && msg["container-title"] && msg["container-title"][0]) || "");
+            const dateParts = (msg && (msg["published-print"] || msg["published-online"]) || {})["date-parts"];
+            entry.year = (dateParts && dateParts[0] && dateParts[0][0]) || null;
+            entry.citations = typeof (msg && msg["is-referenced-by-count"]) === "number" ? msg["is-referenced-by-count"] : null;
+          })
+          .catch((err) => {
+            if (!isRetry) return attempt(entry, true);
+            entry.error = true;
+          });
+
+      const fetchOne = (entry) =>
+        attempt(entry, false).finally(() => {
+          done += 1;
+          chrome.runtime.sendMessage({ action: "progress", line: `Fetching paper details… ${done}/${entries.length}` }, () => void chrome.runtime.lastError);
         });
 
-    const fetchOne = (entry) =>
-      attempt(entry, false).finally(() => {
-        done += 1;
-        chrome.runtime.sendMessage({ action: "progress", line: `Fetching paper details… ${done}/${entries.length}` }, () => void chrome.runtime.lastError);
+      const worker = () => {
+        if (cursor >= entries.length) return Promise.resolve();
+        const entry = entries[cursor];
+        cursor += 1;
+        return fetchOne(entry).then(worker);
+      };
+
+      const workers = new Array(Math.min(CONCURRENCY, entries.length)).fill(0).map(worker);
+      Promise.all(workers).then(() => {
+        sendResponse({ success: true, entries });
       });
-
-    const worker = () => {
-      if (cursor >= entries.length) return Promise.resolve();
-      const entry = entries[cursor];
-      cursor += 1;
-      return fetchOne(entry).then(worker);
-    };
-
-    const workers = new Array(Math.min(CONCURRENCY, entries.length)).fill(0).map(worker);
-    Promise.all(workers).then(() => {
-      sendResponse({ success: true, entries });
     });
     return true;
   }
@@ -2691,7 +2737,7 @@ async function fetchOmniboxSuggestions(query, signal) {
     "&select=DOI,title,author,container-title,issued,abstract" +
     "&query.bibliographic=" +
     encodeURIComponent(query);
-  const res = await fetch(url, { signal });
+  const res = await fetchWithTimeout(url, { signal });
   if (!res.ok) return [];
   const data = await res.json();
   const items = (data && data.message && data.message.items) || [];
@@ -2802,11 +2848,14 @@ function normalizeDoi(raw) {
     .replace(/[)\].,;'"]+$/, "");
 }
 
-// Polite-pool contact for Crossref/OpenAlex, read from Settings' configured
+// Appends Crossref/OpenAlex's polite-pool mailto= param (meaningfully
+// better rate limits and reliability), read from Settings' configured
 // Unpaywall email (chrome.storage.sync, via getSettings()) rather than a
 // hardcoded constant — that's a per-user, changeable setting, not a fixed
-// value this file could bake in at edit time.
-function snowballUrl(url, mailto) {
+// value this file could bake in at edit time. Originally written only for
+// the snowball feature (hence the old name); every Crossref call site in
+// this file should route through this now, not just that one.
+function crossrefUrl(url, mailto) {
   if (!mailto) return url;
   return url + (url.indexOf("?") >= 0 ? "&" : "?") + "mailto=" + encodeURIComponent(mailto);
 }
@@ -2830,7 +2879,7 @@ function snowballAuthorLabel(authorships) {
 }
 
 async function snowballFetchReferences(doi, cap, mailto) {
-  const res = await fetch(snowballUrl("https://api.crossref.org/works/" + doi, mailto));
+  const res = await fetchWithTimeout(crossrefUrl("https://api.crossref.org/works/" + doi, mailto));
   if (!res.ok) return { total: 0, neighbors: [] };
   const data = await res.json();
   const refs = (data.message && data.message.reference) || [];
@@ -2853,12 +2902,12 @@ async function snowballFetchReferences(doi, cap, mailto) {
 // Forward neighbors: papers that cite this one, top-k by citation count
 // (OpenAlex). Two calls: resolve the DOI to an OpenAlex id, then query cites.
 async function snowballFetchCitations(doi, cap, mailto) {
-  const wRes = await fetch(snowballUrl("https://api.openalex.org/works/https://doi.org/" + doi, mailto));
+  const wRes = await fetchWithTimeout(crossrefUrl("https://api.openalex.org/works/https://doi.org/" + doi, mailto));
   if (!wRes.ok) return { total: 0, neighbors: [] };
   const work = await wRes.json();
   const shortId = (work.id || "").replace(/^https?:\/\/openalex\.org\//, "");
   if (!shortId) return { total: work.cited_by_count || 0, neighbors: [] };
-  const cRes = await fetch(snowballUrl(
+  const cRes = await fetchWithTimeout(crossrefUrl(
     "https://api.openalex.org/works?filter=cites:" + shortId +
     "&sort=cited_by_count:desc&per_page=" + Math.min(cap, 200) +
     "&select=id,doi,title,cited_by_count,authorships",
@@ -2885,7 +2934,7 @@ async function enrichSnowballTitles(results, mailto) {
     const chunk = need.slice(i, i + 50);
     const filter = chunk.map((r) => "https://doi.org/" + r.doi).join("|");
     try {
-      const res = await fetch(snowballUrl(
+      const res = await fetchWithTimeout(crossrefUrl(
         "https://api.openalex.org/works?per_page=50&select=doi,title,authorships&filter=doi:" + filter,
         mailto
       ));
@@ -2977,7 +3026,7 @@ async function runSnowball(params, port) {
   let seedTitle = "";
   let seedAuthor = "";
   try {
-    const sr = await fetch(snowballUrl("https://api.openalex.org/works/https://doi.org/" + seed + "?select=title,authorships", mailto));
+    const sr = await fetchWithTimeout(crossrefUrl("https://api.openalex.org/works/https://doi.org/" + seed + "?select=title,authorships", mailto));
     if (sr.ok) {
       const sdata = await sr.json();
       seedTitle = sdata.title || "";

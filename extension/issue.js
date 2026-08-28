@@ -27,16 +27,35 @@ function escapeHtml(str) {
 // case-insensitively. Used for Search This Journal results, where seeing
 // *why* something matched matters more than for the plain issue list.
 function highlightTerms(text, terms) {
-  const escaped = escapeHtml(text);
-  if (!terms || terms.length === 0) return escaped;
+  const validTerms = (terms || []).filter(Boolean);
+  if (validTerms.length === 0) return escapeHtml(text);
 
-  const pattern = terms
-    .filter(Boolean)
-    .map((t) => t.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"))
-    .join("|");
-  if (!pattern) return escaped;
+  const pattern = validTerms.map((t) => t.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).join("|");
+  if (!pattern) return escapeHtml(text);
 
-  return escaped.replace(new RegExp(`(${pattern})`, "gi"), "<mark>$1</mark>");
+  // Matches against the RAW text, not an already-HTML-escaped copy of it,
+  // then escapes each piece (matched and unmatched) separately while
+  // building the output. Matching against pre-escaped text was two bugs in
+  // one: a raw term containing an HTML metacharacter (e.g. searching for
+  // literal "&") could never match its escaped form ("&amp;") at all, AND —
+  // the part escaping the terms too doesn't fix — a term with no special
+  // characters could still coincidentally match *inside* an unrelated
+  // entity in the escaped text (searching "amp" matching inside "&amp;",
+  // producing the visibly broken "&<mark>amp</mark>;"). Matching before any
+  // escaping happens rules out both: "amp" can only match a literal "amp"
+  // substring in the real text, never a byproduct of how "&" is rendered.
+  const re = new RegExp(pattern, "gi");
+  let result = "";
+  let lastIndex = 0;
+  let match;
+  while ((match = re.exec(text)) !== null) {
+    result += escapeHtml(text.slice(lastIndex, match.index));
+    result += "<mark>" + escapeHtml(match[0]) + "</mark>";
+    lastIndex = match.index + match[0].length;
+    if (match[0].length === 0) re.lastIndex += 1; // guard against a zero-length match looping forever
+  }
+  result += escapeHtml(text.slice(lastIndex));
+  return result;
 }
 
 // Positions near the cursor but nudged to stay on-screen, since the tooltip's

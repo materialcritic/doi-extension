@@ -6,6 +6,15 @@ native-host/papers/
 native-host/download_log.txt
 native-host/mirror_health.json
 native-host/debug_log.txt
+native-host/python_cache.json
+
+# The real, filled-in Native Messaging manifest — install.ps1 now writes this
+# to %LOCALAPPDATA%\doi-grabber\ instead (outside the checkout), but this
+# entry stays as a defense-in-depth guard against ever regenerating a real
+# manifest inside the repo again. native-host/com.doi_grabber.host.json.template
+# (committed, tracked) is the placeholder both installers read from — never
+# generate a real manifest at the un-suffixed path.
+native-host/com.doi_grabber.host.json
 
 # Backup zips exported from the extension's Settings page
 doi-grabber-backup-*.zip

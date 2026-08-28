@@ -1,0 +1,9 @@
+# Required for every action scihub_download.py performs.
+requests>=2.28
+beautifulsoup4>=4.11
+
+# Optional — only needed for "Scan Page for DOIs" on a PDF opened directly in
+# Chrome (scan_pdf_for_dois() lazily imports this; every other action works
+# fine without it). Install it separately if you don't need that feature:
+#   pip3 install pypdf
+# pypdf>=4.0

@@ -16,7 +16,22 @@ $ErrorActionPreference = "Stop"
 $ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 $HostWrapper = Join-Path $ScriptDir "doi_host.bat"
 $ManifestName = "com.doi_grabber.host.json"
-$ManifestDest = Join-Path $ScriptDir $ManifestName
+# Generated (real-values) manifest goes OUTSIDE the repo checkout, in
+# %LOCALAPPDATA%\doi-grabber\ -- not next to doi_host.py the way an earlier
+# version of this script did. Writing it inside native-host/ meant it landed
+# on a path git already tracks (as a placeholder template with
+# YOUR_USERNAME/YOUR_EXTENSION_ID), so `git status` immediately showed the
+# generated file as locally modified -- forever, on every machine that ever
+# ran this installer. apply_update refuses to `git pull` while any tracked
+# file is modified, so anyone who installed on Windows exactly per the
+# README permanently lost the ability to self-update. install.sh doesn't
+# have this problem: it heredocs its own copy straight to the OS's real
+# NativeMessagingHosts folder and never touches a path git tracks -- this
+# does the equivalent for Windows, which registers hosts via the registry
+# instead of a fixed folder.
+$ManifestDir = Join-Path $env:LOCALAPPDATA "doi-grabber"
+New-Item -ItemType Directory -Path $ManifestDir -Force | Out-Null
+$ManifestDest = Join-Path $ManifestDir $ManifestName
 
 if (-not (Test-Path $HostWrapper)) {
     Write-Error "Couldn't find doi_host.bat next to this script - make sure you're running install.ps1 from inside native-host\."
@@ -27,11 +42,24 @@ Write-Host ""
 Write-Host "Open chrome://extensions, enable Developer Mode, load the extension,"
 Write-Host "and paste its Extension ID below."
 Write-Host ""
-$ExtId = Read-Host "Extension ID"
-
-if ([string]::IsNullOrWhiteSpace($ExtId)) {
-    Write-Error "Extension ID cannot be empty."
-    exit 1
+# Chrome extension IDs are always exactly 32 lowercase characters from a-p
+# (derived from a SHA-256 hash mapped into that alphabet) -- validating the
+# shape here catches a typo/paste mistake immediately, instead of producing
+# a manifest Chrome will silently ignore and leaving the user staring at a
+# generic "native host has exited" with nothing to go on. This has
+# historically been the single most common support symptom for this project.
+while ($true) {
+    $ExtId = Read-Host "Extension ID"
+    if ([string]::IsNullOrWhiteSpace($ExtId)) {
+        Write-Host "Extension ID cannot be empty."
+        continue
+    }
+    if ($ExtId -notmatch "^[a-p]{32}$") {
+        Write-Host "That doesn't look like a Chrome extension ID (expected exactly 32 letters, a-p)."
+        Write-Host "Double-check chrome://extensions and paste it again."
+        continue
+    }
+    break
 }
 
 # Native Messaging manifest - same shape as the macOS/Linux one, but "path"

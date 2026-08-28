@@ -127,7 +127,88 @@ def find_python_with_requests():
 # Chrome launches this host with its own python3/python, which may lack
 # packages your script needs (e.g. requests). Override via Settings (Python
 # interpreter path) if the auto-detected one below doesn't have them.
-PYTHON_BIN = find_python_with_requests()
+#
+# find_python_with_requests() itself is NOT called here at module scope
+# any more. Native messaging spawns a brand-new doi_host.py process per
+# request, so a bare module-level call ran the full candidate-probing loop
+# (up to ~8 interpreters, each spawned just to test-import requests/bs4,
+# plus a `py -3` resolve on Windows) on EVERY single request -- including
+# actions like mirror_health/recent_downloads/download_stats/get_debug_log
+# that never spawn Python at all. On a badge check (i.e. every academic
+# page opened), that's tens of process spawns and real, avoidable latency
+# before the actual work even starts. get_python_bin() below makes this
+# both lazy (only actually called from the two dispatch sites that spawn
+# scihub_download.py) and cached across process invocations, via a small
+# JSON file next to this script -- an in-memory-only cache would do
+# nothing here, since there's no long-lived process to hold it in.
+PYTHON_CACHE_PATH = os.path.join(SCRIPT_DIR, "python_cache.json")
+PYTHON_CACHE_MAX_AGE_DAYS = 7
+_python_bin_memo = None  # per-process memo; only matters if get_python_bin()
+                          # were ever called twice in one invocation, which
+                          # doesn't currently happen, but costs nothing to have.
+
+
+def _load_cached_python_bin():
+    """Returns the cached interpreter (str or [path, "-3"]) if the cache
+    file exists, isn't stale, and the cached path still points at a real
+    file on disk -- otherwise None, meaning the caller should re-probe.
+    Never raises: a corrupt or missing cache just means "re-probe", the
+    same outcome as no caching existing at all."""
+    try:
+        with open(PYTHON_CACHE_PATH, encoding="utf-8") as f:
+            cache = json.load(f)
+    except (FileNotFoundError, json.JSONDecodeError, OSError):
+        return None
+    value = cache.get("python_bin")
+    cached_at = cache.get("cached_at")
+    if not value or not cached_at:
+        return None
+    try:
+        age = datetime.now(timezone.utc) - datetime.fromisoformat(cached_at)
+    except ValueError:
+        return None
+    if age > timedelta(days=PYTHON_CACHE_MAX_AGE_DAYS):
+        return None
+    exe = value[0] if isinstance(value, list) else value
+    if not exe or not os.path.isfile(exe):
+        return None
+    return value
+
+
+def _save_cached_python_bin(value):
+    """Best-effort write of the resolved interpreter to the cache file.
+    Never raises -- caching is purely an optimization; failing to persist
+    it should never be the reason a request fails, it just means the next
+    request re-probes instead of reading the cache."""
+    try:
+        tmp_path = PYTHON_CACHE_PATH + ".tmp"
+        with open(tmp_path, "w", encoding="utf-8") as f:
+            json.dump({"python_bin": value, "cached_at": datetime.now(timezone.utc).isoformat()}, f)
+        os.replace(tmp_path, PYTHON_CACHE_PATH)
+    except OSError:
+        pass
+
+
+def get_python_bin():
+    """Resolves the auto-detected Python interpreter, reading from
+    PYTHON_CACHE_PATH when there's a fresh, still-valid entry rather than
+    re-running the full candidate probe on every request. Re-probes (and
+    refreshes the cache) if the cache is missing, stale (>7 days), or the
+    cached path no longer exists -- e.g. after a Python upgrade moved the
+    interpreter to a new versioned path."""
+    global _python_bin_memo
+    if _python_bin_memo is not None:
+        return _python_bin_memo
+    cached = _load_cached_python_bin()
+    if cached is not None:
+        _python_bin_memo = cached
+        return cached
+    resolved = find_python_with_requests()
+    _save_cached_python_bin(resolved)
+    _python_bin_memo = resolved
+    return resolved
+
+
 # Kept in sync with scihub_download.py's own constants — this host reads the
 # same file, it doesn't own it.
 MIRROR_HEALTH_PATH = os.path.join(SCRIPT_DIR, "mirror_health.json")
@@ -139,6 +220,44 @@ DOWNLOAD_LOG_PATH = os.path.join(SCRIPT_DIR, "download_log.txt")
 # subfolder of the repo root, e.g. a clone of github.com/materialcritic/doi-extension).
 REPO_DIR = os.path.dirname(SCRIPT_DIR)
 
+# Self-update's actual authentication is "does origin point where we expect"
+# -- check_for_update/apply_update run `git fetch`/`git pull --ff-only` in
+# REPO_DIR with no other verification of where that traffic goes.
+# --ff-only prevents a merge conflict from corrupting the checkout, but it
+# doesn't authenticate anything: whatever origin points at just becomes code
+# this host runs on the next Chrome restart. Anything able to rewrite
+# .git/config on this machine (another process, a synced folder, a stray
+# script) would otherwise silently redirect the update channel.
+EXPECTED_ORIGIN_PATTERN = r"^(https://github\.com/materialcritic/doi-extension(\.git)?|git@github\.com:materialcritic/doi-extension\.git)$"
+
+# Prevents a `git fetch`/`git pull` from ever blocking on an interactive
+# credential prompt -- there's a timeout on both calls already, but failing
+# immediately with a clear git error is better than hanging for up to a
+# minute first. This repo is public, so a correctly-configured checkout
+# never needs to authenticate at all; if git ever tries to, something's
+# already unexpected about the remote.
+_GIT_NO_PROMPT_ENV = {**os.environ, "GIT_TERMINAL_PROMPT": "0"}
+
+
+def _verify_origin_remote():
+    """Raises RuntimeError if REPO_DIR's `origin` remote doesn't point at
+    this project's real GitHub repo. Call before any fetch/pull in
+    check_for_update/apply_update."""
+    import re
+    result = subprocess.run(
+        ["git", "remote", "get-url", "origin"],
+        cwd=REPO_DIR, capture_output=True, text=True, timeout=10,
+    )
+    if result.returncode != 0:
+        raise RuntimeError(f"Couldn't read the 'origin' remote: {(result.stderr or '').strip() or 'no origin configured'}")
+    url = result.stdout.strip()
+    if not re.match(EXPECTED_ORIGIN_PATTERN, url):
+        raise RuntimeError(
+            f"Refusing to update: 'origin' points at an unexpected repo ({url}), "
+            "not github.com/materialcritic/doi-extension. If you deliberately forked this "
+            "project, self-update isn't meant for that checkout -- update manually with git."
+        )
+
 # Diagnostic log for this process — every request this host handles, plus any
 # uncaught exception (which would otherwise just crash silently with nothing
 # useful for a user to report; see the try/except around main() at the bottom
@@ -146,7 +265,14 @@ REPO_DIR = os.path.dirname(SCRIPT_DIR)
 # (background.js's getExtensionLog action bundles this in alongside its own
 # chrome.storage.local-based log) via the get_debug_log action below.
 DEBUG_LOG_PATH = os.path.join(SCRIPT_DIR, "debug_log.txt")
-DEBUG_LOG_MAX_BYTES = 2 * 1024 * 1024  # trim once the file crosses this size
+# Trim once the file crosses this size. Was 2 MB, which sat well above
+# Chrome's native-messaging 1 MB per-message ceiling -- get_debug_log sends
+# the whole file in a single message, so a log allowed to grow anywhere
+# near 2 MB could get silently dropped by Chrome (connection torn down, no
+# error) right when a user is exporting it because something's already
+# wrong. 512 KB leaves comfortable headroom under the 1 MB limit even
+# before send_message()'s own size guard (belt and suspenders) kicks in.
+DEBUG_LOG_MAX_BYTES = 512 * 1024
 
 
 class _FileLock:
@@ -281,13 +407,13 @@ def kill_process_tree(proc):
 
     Plain proc.kill() only terminates the immediate child. On POSIX that's
     always enough here (scihub_download.py never forks its own children),
-    but on Windows it isn't safe to assume PYTHON_BIN is always a direct
+    but on Windows it isn't safe to assume the resolved interpreter is always a direct
     interpreter — a wrapper process (the `py` launcher is the common case,
     see find_python_with_requests()) spawns the real interpreter as a
     grandchild, and killing only the wrapper leaves that grandchild running
     and still holding the stdout pipe open, so the read loop below never
     sees EOF. taskkill /T recurses the whole tree in one call, so this stays
-    correct even if some future PYTHON_BIN value reintroduces a wrapper hop.
+    correct even if some future resolved interpreter reintroduces a wrapper hop.
     """
     if IS_WINDOWS:
         subprocess.run(
@@ -296,6 +422,109 @@ def kill_process_tree(proc):
         )
     else:
         proc.kill()
+
+
+# ---------------------------------------------------------------------------
+# Path validation -- defense in depth for the five actions below that take a
+# filesystem path straight from the incoming message (read_log, open_folder,
+# append_log, delete_file, reveal) and act on it with no other check.
+# allowed_origins in the native-messaging manifest already pins this host to
+# being reachable only from one specific Chrome extension ID, which is real
+# protection, but it makes "the extension is never wrong" the *entire*
+# security model. The extension renders remote metadata from Crossref,
+# OpenAlex, and Semantic Scholar across a dozen pages -- a single
+# HTML-injection bug anywhere in that surface would otherwise escalate
+# straight to arbitrary local file read/write/delete via this host, which is
+# supposed to be the last line of defense, not just a relay that trusts
+# whatever path arrives.
+# ---------------------------------------------------------------------------
+
+def _allowed_path_roots(settings):
+    """Directories a path-touching action is allowed to operate under: the
+    user's configured output directory (if set), the built-in default output
+    directory, and this script's own directory (native-host/ -- e.g. for any
+    caller that legitimately reasons about a path relative to the host
+    itself). Deliberately a short, explicit allowlist rather than "anything
+    under the user's home directory" -- the whole point is to bound what a
+    compromised extension page could reach even if it could get a message
+    through, and "the entire home directory" isn't much of a bound."""
+    roots = [
+        os.path.join(os.path.expanduser("~"), "Downloads", "autorename"),
+        SCRIPT_DIR,
+    ]
+    output_dir = (settings or {}).get("outputDir")
+    if output_dir:
+        roots.append(output_dir)
+    return roots
+
+
+def _validate_path(path, settings, must_exist=False):
+    """Resolve `path` (following symlinks, collapsing ..) and require the
+    result to sit under one of _allowed_path_roots(). Raises ValueError with
+    a clear, loggable reason on rejection rather than returning a sentinel --
+    every call site below is already inside a try/except that reports
+    str(exception) back to the extension and logs it via debug_log(), so a
+    legitimate config that trips this check is diagnosable rather than a
+    silent no-op."""
+    if not path:
+        raise ValueError("No path provided")
+    resolved = os.path.realpath(path)
+    for root in _allowed_path_roots(settings):
+        if not root:
+            continue
+        try:
+            root_resolved = os.path.realpath(root)
+        except OSError:
+            continue
+        if resolved == root_resolved or resolved.startswith(root_resolved + os.sep):
+            if must_exist and not os.path.exists(resolved):
+                raise ValueError(f"Path does not exist: {resolved}")
+            return resolved
+    raise ValueError(
+        "Path is outside the allowed download directories "
+        "(configured output folder, its built-in default, or the native host's own folder)"
+    )
+
+
+def _validate_script_path(script_path):
+    """script_path can be overridden via Settings' free-text "Script path"
+    field, which means it arrives in the message like any other value --
+    require it to actually resolve inside SCRIPT_DIR. There is no legitimate
+    case for running a script from outside the host's own directory; this
+    exists specifically to stop a compromised Settings value (or a bug
+    upstream that lets untrusted data reach it) from turning into arbitrary
+    code execution via `python <attacker path>`."""
+    resolved = os.path.realpath(script_path)
+    if resolved != os.path.realpath(SCRIPT_DIR) and not resolved.startswith(os.path.realpath(SCRIPT_DIR) + os.sep):
+        raise ValueError(f"Script path must be inside {SCRIPT_DIR}: got {resolved}")
+    return resolved
+
+
+def _validate_python_bin(python_bin):
+    """python_bin can be overridden via Settings' free-text "Python
+    interpreter path" field. Only ever validated for the STRING case here --
+    get_python_bin()'s own internal auto-detection can return a [path, "-3"] list
+    (the Windows py-launcher case, see find_python_with_requests()), but
+    that value is computed internally by this trusted process, never taken
+    from an incoming message, so it doesn't need re-validating here.
+    Requires an existing regular file with the executable bit set, whose
+    basename looks like a real Python interpreter -- rejects a value that's
+    merely *some* executable, which would otherwise be "run this arbitrary
+    binary" gated on nothing but the allowed_origins pin."""
+    import re
+    if not python_bin or not isinstance(python_bin, str):
+        raise ValueError("No Python interpreter path provided")
+    if "\x00" in python_bin:
+        raise ValueError("Python interpreter path contains a null byte")
+    resolved = os.path.realpath(python_bin)
+    if not os.path.isfile(resolved):
+        raise ValueError(f"Python interpreter path is not a file: {resolved}")
+    if not IS_WINDOWS and not os.access(resolved, os.X_OK):
+        raise ValueError(f"Python interpreter path is not executable: {resolved}")
+    basename = os.path.basename(resolved)
+    if not re.match(r"^python(3(\.\d+)?)?(\.exe)?$", basename, re.IGNORECASE):
+        raise ValueError(f"Python interpreter path doesn't look like a Python interpreter: {basename}")
+    return resolved
 
 
 def open_in_file_manager(path):
@@ -319,7 +548,17 @@ def reveal_in_file_manager(path):
     if IS_MACOS:
         subprocess.run(["open", "-R", path], check=True)
     elif IS_WINDOWS:
-        subprocess.run(["explorer", "/select,", path])
+        # Explorer's /select flag and the path must be ONE token
+        # ("/select,C:\path\file.pdf") -- split across two argv entries (as
+        # this was before), Python's subprocess list-to-command-line joining
+        # inserts a space between them, which Explorer doesn't parse as a
+        # select directive at all; it silently opens a default window
+        # instead. subprocess.run with a list still goes through
+        # list2cmdline on Windows (there's no true argv array at the OS
+        # level, just a single command-line string each program parses for
+        # itself), so this only works when the flag and path are already one
+        # string here, not fixed by argument-list splitting.
+        subprocess.run(["explorer", "/select," + os.path.normpath(path)])
     else:
         subprocess.run(["xdg-open", os.path.dirname(path)], check=True)
 
@@ -334,12 +573,80 @@ def read_message():
     return json.loads(raw_message.decode("utf-8"))
 
 
+# Chrome's native-messaging protocol hard-caps a single message at 1 MB
+# (https://developer.chrome.com/docs/extensions/develop/concepts/native-messaging#native-messaging-host-protocol)
+# -- over that, Chrome drops the message and tears down the connection with
+# no error the host can catch or report. Guarded well under the real limit
+# so there's room for JSON overhead (field names, escaping) on top of
+# whatever payload triggered this.
+NATIVE_MESSAGE_SAFE_BYTES = 900 * 1024
+
+
 def send_message(data):
-    """Send a Native Messaging message to stdout."""
+    """Send a Native Messaging message to stdout.
+
+    Guards against Chrome's 1 MB per-message ceiling: a message built from
+    unbounded data (a long-lived download_log.txt, a big debug log, an
+    arbitrary file read via read_log) could otherwise exceed it and get
+    silently dropped, tearing down the native-messaging connection with no
+    error visible anywhere -- precisely when a user is trying to export logs
+    because something has already been going wrong. Sending a small,
+    well-formed error instead is always safer than risking a message Chrome
+    will reject outright.
+    """
     encoded = json.dumps(data).encode("utf-8")
+    if len(encoded) > NATIVE_MESSAGE_SAFE_BYTES:
+        debug_log(f"send_message: payload was {len(encoded)} bytes, over the safe limit -- sending a truncation error instead")
+        fallback = {
+            "type": data.get("type", "result"),
+            "status": "error",
+            "detail": (
+                f"Response was too large to send ({len(encoded) // 1024} KB) -- "
+                "Chrome's native-messaging limit is 1 MB per message. The underlying "
+                "file is larger than this host currently supports returning in one piece."
+            ),
+        }
+        encoded = json.dumps(fallback).encode("utf-8")
     sys.stdout.buffer.write(struct.pack("=I", len(encoded)))
     sys.stdout.buffer.write(encoded)
     sys.stdout.buffer.flush()
+
+
+def _read_capped(path, max_bytes):
+    """Read a text file, returning at most the LAST max_bytes bytes of it if
+    it's larger -- used anywhere a file of unbounded/user-controlled size
+    (download_log.txt grows forever across a heavy user's history; read_log
+    can point at any per-batch subfolder log) gets sent back over native
+    messaging, so send_message()'s guard above is a last resort rather than
+    the normal path. Seeks to a byte boundary first, then decodes with
+    errors='replace' so landing mid-multibyte-character at the cut point
+    can't raise -- a slightly garbled first character is a fine trade for
+    not crashing the export."""
+    size = os.path.getsize(path)
+    with open(path, "rb") as f:
+        if size > max_bytes:
+            f.seek(size - max_bytes)
+            content = "... [truncated - showing the most recent portion] ...\n" + f.read().decode("utf-8", errors="replace")
+        else:
+            content = f.read().decode("utf-8", errors="replace")
+    return content
+
+
+def _months_ago(dt, n):
+    """Subtract n calendar months from dt, clamping the day if the target
+    month is shorter (e.g. Aug 31 minus 6 months lands on Feb 28/29, not an
+    invalid Feb 31). Used instead of timedelta(days=30*n), which drifts a
+    real, compounding amount from "n calendar months" (30*7 = 210 days is
+    anywhere from about a week to two weeks short of 7 real months,
+    depending which months are involved) -- not just imprecise rounding.
+    Doesn't pull in python-dateutil as a new dependency for what's a small
+    amount of arithmetic."""
+    month_index = dt.month - 1 - n
+    year = dt.year + month_index // 12
+    month = month_index % 12 + 1
+    import calendar
+    day = min(dt.day, calendar.monthrange(year, month)[1])
+    return dt.replace(year=year, month=month, day=day)
 
 
 def find_renamed_file(filepath):
@@ -398,8 +705,7 @@ def main():
 
     if message.get("action") == "get_debug_log":
         try:
-            with open(DEBUG_LOG_PATH, encoding="utf-8", errors="replace") as f:
-                content = f.read()
+            content = _read_capped(DEBUG_LOG_PATH, DEBUG_LOG_MAX_BYTES)
         except FileNotFoundError:
             content = ""
         send_message({"type": "result", "status": "ok", "debug_log": content})
@@ -436,12 +742,24 @@ def main():
             cooling_down = False
             cooldown_remaining_min = 0
             if fail_count >= MIRROR_FAIL_THRESHOLD and last_failed:
-                last_failed_dt = datetime.fromisoformat(last_failed)
-                elapsed = now - last_failed_dt
-                remaining = timedelta(minutes=MIRROR_COOLDOWN_MINUTES) - elapsed
-                if remaining.total_seconds() > 0:
-                    cooling_down = True
-                    cooldown_remaining_min = round(remaining.total_seconds() / 60)
+                # mirror_health.json is written by a separate process
+                # (scihub_download.py) and can be truncated/malformed by a
+                # crash mid-write — unlike the last_seen parse above, this
+                # one had no guard at all, so a single bad timestamp raised
+                # ValueError straight out of this handler (no surrounding
+                # try/except here) and took down the whole host, breaking
+                # every native-host action for the rest of that connection,
+                # not just this one field. Same treatment as last_seen:
+                # treat an unparseable value as "not cooling down" instead.
+                try:
+                    last_failed_dt = datetime.fromisoformat(last_failed)
+                    elapsed = now - last_failed_dt
+                    remaining = timedelta(minutes=MIRROR_COOLDOWN_MINUTES) - elapsed
+                    if remaining.total_seconds() > 0:
+                        cooling_down = True
+                        cooldown_remaining_min = round(remaining.total_seconds() / 60)
+                except ValueError:
+                    pass
             mirrors.append({
                 "url": url,
                 "fail_count": fail_count,
@@ -468,8 +786,15 @@ def main():
         else:
             health = {}
 
-        with open(MIRROR_HEALTH_PATH, "w") as f:
+        # Atomic write (temp file + os.replace, same pattern import_data and
+        # scihub_download.py's own save_mirror_health() already use) --
+        # scihub_download.py may be reading/writing this same file
+        # concurrently from an in-flight mirror race, and a direct "w" open
+        # here could hand it a half-written file mid-read.
+        tmp_path = MIRROR_HEALTH_PATH + ".tmp"
+        with open(tmp_path, "w") as f:
             json.dump(health, f, indent=2)
+        os.replace(tmp_path, MIRROR_HEALTH_PATH)
 
         send_message({"type": "result", "status": "ok"})
         return
@@ -488,6 +813,17 @@ def main():
         # Feeds Settings' "Export Everything" backup zip — the raw text of
         # both files this host owns the paths for, so the extension doesn't
         # need to know/hardcode these paths itself.
+        #
+        # Deliberately NOT capped/truncated the way get_debug_log/read_log
+        # are below: this is a *backup*, meant to be restorable later via
+        # import_data, and a heavy user's download_log.txt can in principle
+        # grow past Chrome's 1 MB native-message ceiling. Silently sending
+        # back only the most recent portion would produce a backup that
+        # looks complete but silently drops older history -- discovered only
+        # months later, at restore time, when it's too late to do anything
+        # about it. send_message()'s own size guard is the safety net here
+        # instead: a loud, honest "too large to export" beats a quiet,
+        # incomplete backup.
         try:
             with open(DOWNLOAD_LOG_PATH) as f:
                 download_log = f.read()
@@ -541,9 +877,11 @@ def main():
         # behind origin, plus the commit subjects that would land, without
         # changing anything on disk (git fetch only touches remote-tracking refs).
         try:
+            _verify_origin_remote()
             subprocess.run(
                 ["git", "fetch", "--quiet", "origin"],
                 cwd=REPO_DIR, check=True, capture_output=True, text=True, timeout=30,
+                env=_GIT_NO_PROMPT_ENV,
             )
             branch = subprocess.run(
                 ["git", "rev-parse", "--abbrev-ref", "HEAD"],
@@ -576,6 +914,7 @@ def main():
         # process behind; a clean fast-forward is the safe case and the only
         # one Settings' "Update Now" button offers.
         try:
+            _verify_origin_remote()
             status = subprocess.run(
                 ["git", "status", "--porcelain"],
                 cwd=REPO_DIR, check=True, capture_output=True, text=True,
@@ -615,6 +954,7 @@ def main():
             pull = subprocess.run(
                 ["git", "pull", "--ff-only"],
                 cwd=REPO_DIR, check=True, capture_output=True, text=True, timeout=60,
+                env=_GIT_NO_PROMPT_ENV,
             )
             native_host_changed = "native-host/" in pull.stdout
             send_message({
@@ -658,10 +998,15 @@ def main():
 
     if message.get("action") == "download_stats":
         now = datetime.now()
+        # "last_7_months" used to be timedelta(days=30*7) = 210 days, not
+        # seven calendar months (which is anywhere from ~204 to ~215 days
+        # depending which months are involved) -- close enough to not be
+        # obviously wrong, but a real, compounding drift, not just rounding.
+        # _months_ago() computes the actual calendar-month boundary instead.
         windows = {
-            "last_7_weeks": timedelta(weeks=7),
-            "last_7_months": timedelta(days=30 * 7),
-            "last_year": timedelta(days=365),
+            "last_7_weeks": now - timedelta(weeks=7),
+            "last_7_months": _months_ago(now, 7),
+            "last_year": now - timedelta(days=365),
         }
         counts = {"total": 0, "last_7_weeks": 0, "last_7_months": 0, "last_year": 0}
 
@@ -676,8 +1021,8 @@ def main():
                     except ValueError:
                         continue
                     counts["total"] += 1
-                    for key, window in windows.items():
-                        if now - ts <= window:
+                    for key, cutoff in windows.items():
+                        if ts >= cutoff:
                             counts[key] += 1
         except FileNotFoundError:
             pass
@@ -687,54 +1032,75 @@ def main():
 
     if message.get("action") == "read_log":
         filepath = message.get("filepath")
+        settings = message.get("settings") or {}
         try:
-            with open(filepath) as f:
-                content = f.read()
+            filepath = _validate_path(filepath, settings)
+            content = _read_capped(filepath, DEBUG_LOG_MAX_BYTES)
             send_message({"type": "result", "status": "ok", "content": content})
         except FileNotFoundError:
             send_message({"type": "result", "status": "ok", "content": ""})
         except Exception as e:
+            debug_log(f"read_log rejected: {e}")
             send_message({"type": "result", "status": "error", "detail": str(e)})
         return
 
     if message.get("action") == "open_folder":
         folder = message.get("folder")
+        settings = message.get("settings") or {}
         try:
+            folder = _validate_path(folder, settings)
             os.makedirs(folder, exist_ok=True)
             open_in_file_manager(folder)
             send_message({"type": "result", "status": "ok"})
         except Exception as e:
+            debug_log(f"open_folder rejected: {e}")
             send_message({"type": "result", "status": "error", "detail": str(e)})
         return
 
     if message.get("action") == "append_log":
         filepath = message.get("filepath")
         line = message.get("line", "")
+        settings = message.get("settings") or {}
         try:
+            filepath = _validate_path(filepath, settings)
             os.makedirs(os.path.dirname(filepath), exist_ok=True)
             with open(filepath, "a") as f:
                 f.write(line + "\n")
             send_message({"type": "result", "status": "ok"})
         except Exception as e:
+            debug_log(f"append_log rejected: {e}")
             send_message({"type": "result", "status": "error", "detail": str(e)})
         return
 
     if message.get("action") == "delete_file":
         filepath = message.get("filepath")
+        settings = message.get("settings") or {}
         try:
+            filepath = _validate_path(filepath, settings)
+            # This action exists solely to remove a corrupt download (the
+            # popup's "Delete Corrupt File" button) -- restrict it further
+            # than the general path check, since "delete an arbitrary file
+            # under the output folder" is a bigger blast radius than this
+            # feature actually needs.
+            if not filepath.lower().endswith(".pdf"):
+                raise ValueError("delete_file only accepts a .pdf path")
             os.remove(filepath)
             send_message({"type": "result", "status": "ok"})
         except Exception as e:
+            debug_log(f"delete_file rejected: {e}")
             send_message({"type": "result", "status": "error", "detail": str(e)})
         return
 
     if message.get("action") == "reveal":
         filepath = message.get("filepath")
+        settings = message.get("settings") or {}
         try:
+            filepath = _validate_path(filepath, settings)
             target = resolve_reveal_target(filepath)
             reveal_in_file_manager(target)
             send_message({"type": "result", "status": "ok"})
         except Exception as e:
+            debug_log(f"reveal rejected: {e}")
             send_message({"type": "result", "status": "error", "detail": str(e)})
         return
 
@@ -745,14 +1111,31 @@ def main():
             send_message({"type": "result", "status": "error", "detail": "No PDF URL received"})
             return
 
-        python_bin = settings.get("pythonBin") or PYTHON_BIN
+        # settings.get("pythonBin") or get_python_bin() -- Python's `or`
+        # short-circuits, so an actual Settings override skips calling
+        # get_python_bin() (and therefore any interpreter probing) entirely.
+        used_override = bool(settings.get("pythonBin"))
+        python_bin = settings.get("pythonBin") or get_python_bin()
         script_path = settings.get("scriptPath") or YOUR_SCRIPT
+        try:
+            # Only re-validate an actual override from Settings -- the
+            # auto-detected interpreter/script are computed/configured by
+            # this trusted process itself, not taken from the incoming
+            # message.
+            if settings.get("pythonBin"):
+                python_bin = _validate_python_bin(settings["pythonBin"])
+            if settings.get("scriptPath"):
+                script_path = _validate_script_path(settings["scriptPath"])
+        except ValueError as e:
+            debug_log(f"scan_pdf_dois rejected: {e}")
+            send_message({"type": "result", "status": "error", "detail": str(e)})
+            return
         python_bin_args = python_bin if isinstance(python_bin, list) else [python_bin]
         cmd = python_bin_args + [script_path, "--scan-pdf-url", url]
 
         debug_log(
             f"spawning (scan_pdf_dois): url={_redact_url_for_log(url)} platform={platform.system()} {platform.release()} "
-            f"python_bin={python_bin_args} (auto-detected={python_bin == PYTHON_BIN}) script={script_path}"
+            f"python_bin={python_bin_args} (auto-detected={not used_override}) script={script_path}"
         )
 
         try:
@@ -822,19 +1205,36 @@ def main():
     doi = message["doi"]
     settings = message.get("settings") or {}
 
-    python_bin = settings.get("pythonBin") or PYTHON_BIN
+    # settings.get("pythonBin") or get_python_bin() -- Python's `or`
+    # short-circuits, so an actual Settings override skips calling
+    # get_python_bin() (and therefore any interpreter probing) entirely.
+    used_override = bool(settings.get("pythonBin"))
+    python_bin = settings.get("pythonBin") or get_python_bin()
     script_path = settings.get("scriptPath") or YOUR_SCRIPT
     output_dir = settings.get("outputDir")
     mirrors = settings.get("mirrors")
     scidb_mirrors = settings.get("scidbMirrors")
     unpaywall_email = settings.get("unpaywallEmail")
 
+    try:
+        # Only re-validate an actual override from Settings -- the
+        # auto-detected interpreter/script are computed/configured by this
+        # trusted process itself, not taken from the incoming message.
+        if settings.get("pythonBin"):
+            python_bin = _validate_python_bin(settings["pythonBin"])
+        if settings.get("scriptPath"):
+            script_path = _validate_script_path(settings["scriptPath"])
+    except ValueError as e:
+        debug_log(f"result: doi={doi} status=error detail=rejected: {e}")
+        send_message({"type": "result", "status": "error", "detail": str(e)})
+        return
+
     # find_python_with_requests() always resolves to a single concrete
     # interpreter path now (see its docstring for why: spawning through a
     # wrapper like the `py` launcher instead is what caused the Windows
     # hang-forever bug this file's kill_process_tree() works around). Kept
-    # as a list-or-string flatten anyway since PYTHON_BIN can be overridden
-    # by Settings' free-text Python interpreter path field.
+    # as a list-or-string flatten anyway since the interpreter can be
+    # overridden by Settings' free-text Python interpreter path field.
     python_bin_args = python_bin if isinstance(python_bin, list) else [python_bin]
     cmd = python_bin_args + [script_path, doi]
     if output_dir:
@@ -855,7 +1255,7 @@ def main():
     # error follows rather than requiring a separate "session start" line.
     debug_log(
         f"spawning: doi={doi} platform={platform.system()} {platform.release()} "
-        f"python_bin={python_bin_args} (auto-detected={python_bin == PYTHON_BIN}) "
+        f"python_bin={python_bin_args} (auto-detected={not used_override}) "
         f"script={script_path} cmd_tail={cmd[2:]}"
     )
 
