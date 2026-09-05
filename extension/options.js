@@ -367,8 +367,13 @@ function loadAuthorWatchlist() {
       row.className = "row";
 
       const label = document.createElement("span");
-      label.className = "row-label";
+      label.className = "row-label author-link";
       label.textContent = w.author;
+      label.title = "Open " + w.author + "'s Download All Works page";
+      label.addEventListener("click", () => {
+        const url = chrome.runtime.getURL("author.html") + "?author=" + encodeURIComponent(w.author);
+        chrome.tabs.create({ url });
+      });
 
       const right = document.createElement("span");
       right.style.display = "flex";
