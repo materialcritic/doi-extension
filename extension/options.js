@@ -522,15 +522,16 @@ document.getElementById("btn-check-topic-watchlist").addEventListener("click", (
 });
 
 const STAT_LABELS = {
-  total: "Total downloads ever",
-  last_7_weeks: "Last 7 weeks",
-  last_7_months: "Last 7 months",
-  last_year: "Last year",
+  last_24_hours: "Last 24 hours",
+  last_week: "Last week",
+  last_month: "Last month",
+  last_6_months: "Last 6 months",
+  total: "All time (since install)",
 };
 
 function loadDownloadStats() {
   const container = document.getElementById("download-stats-list");
-  container.innerHTML = skeletonRowsHtml(4, "55%", "15%");
+  container.innerHTML = skeletonRowsHtml(5, "55%", "15%");
 
   chrome.runtime.sendMessage({ action: "getDownloadStats" }, (resp) => {
     if (!resp || !resp.success) {
@@ -540,7 +541,7 @@ function loadDownloadStats() {
 
     const counts = resp.counts || {};
     container.innerHTML = "";
-    ["total", "last_7_weeks", "last_7_months", "last_year"].forEach((key) => {
+    ["last_24_hours", "last_week", "last_month", "last_6_months", "total"].forEach((key) => {
       const row = document.createElement("div");
       row.className = "row";
 

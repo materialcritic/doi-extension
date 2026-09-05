@@ -421,7 +421,7 @@ Right-click the toolbar icon → **Options** (or click ⚙ in the popup):
 - **Keyboard Shortcuts** — read-only view of the current Alt+D/Alt+F bindings, with a link to Chrome's remap page
 - **Popup Shortcuts** — reassign any of the single-key popup shortcuts
 - **Journal Watchlist** / **Author Watchlist** / **Topic Watchlist** — manage what you're currently watching, with a manual "Check Now" (Topic Watchlist is followed from [Trending in a Topic](#trending-in-a-topic)'s own page, not added directly here)
-- **Download Stats** — total-ever / last-7-weeks / last-7-months / last-year download counts
+- **Download Stats** — download counts for the last 24 hours / last week / last month / last 6 months / all time since install
 - **Paper of the Day** — a deterministic daily pick from your download history, with a "Show Another" button and a collapsible "Previously shown" history (with a Clear History button)
 - **Mirror Health** — per-mirror fail count, cooldown countdown, and a latency sparkline; per-mirror or global reset
 - **Updates** — check for and install new versions from GitHub; see [Keeping it up to date](#keeping-it-up-to-date)

@@ -998,17 +998,17 @@ def main():
 
     if message.get("action") == "download_stats":
         now = datetime.now()
-        # "last_7_months" used to be timedelta(days=30*7) = 210 days, not
-        # seven calendar months (which is anywhere from ~204 to ~215 days
-        # depending which months are involved) -- close enough to not be
-        # obviously wrong, but a real, compounding drift, not just rounding.
-        # _months_ago() computes the actual calendar-month boundary instead.
+        # _months_ago() computes the actual calendar-month boundary rather
+        # than a fixed-days approximation (timedelta(days=30*n) drifts a
+        # real, compounding amount from "n calendar months" -- see its own
+        # docstring) — used here for "last_month"/"last_6_months".
         windows = {
-            "last_7_weeks": now - timedelta(weeks=7),
-            "last_7_months": _months_ago(now, 7),
-            "last_year": now - timedelta(days=365),
+            "last_24_hours": now - timedelta(hours=24),
+            "last_week": now - timedelta(weeks=1),
+            "last_month": _months_ago(now, 1),
+            "last_6_months": _months_ago(now, 6),
         }
-        counts = {"total": 0, "last_7_weeks": 0, "last_7_months": 0, "last_year": 0}
+        counts = {"total": 0, "last_24_hours": 0, "last_week": 0, "last_month": 0, "last_6_months": 0}
 
         try:
             with open(DOWNLOAD_LOG_PATH) as f:
