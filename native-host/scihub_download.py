@@ -838,59 +838,88 @@ class SciHubDownloader:
 
         print(f"Found PDF at: {pdf_url}" + (" (open access)" if source == 'open_access' else ""), flush=True)
 
+        # Generate filename if not provided
+        if not filename:
+            doi = self.extract_doi(identifier)
+            # Clean DOI for filename
+            filename = re.sub(r'[^\w\-.]', '_', doi) + '.pdf'
+
+        if not filename.endswith('.pdf'):
+            filename += '.pdf'
+
+        filepath = self.output_dir / filename
+
         try:
-            self.log(f"Downloading from: {pdf_url}")
-            response = self._get_with_429_retry(pdf_url, timeout=30, stream=True)
-            response.raise_for_status()
+            # A mirror can reset the connection partway through streaming the
+            # PDF body, not just on the initial request -- confirmed from a
+            # real user's exported log (12 downloads in one batch failed
+            # this exact way, all "Connection aborted" /
+            # ConnectionResetError/RemoteDisconnected). _get_with_429_retry
+            # alone doesn't cover this: it only guards the initial response,
+            # not the iter_content() loop that follows it. Retries the WHOLE
+            # request+stream here instead of trying to resume the partial
+            # file -- these mirrors don't reliably support Range requests,
+            # so a clean redo is the safer bet, same reasoning as the 429
+            # retry this mirrors.
+            DOWNLOAD_STREAM_MAX_RETRIES = 2
+            downloaded = 0
+            header_bytes = b''
+            content_type = ''
+            for attempt in range(DOWNLOAD_STREAM_MAX_RETRIES + 1):
+                try:
+                    self.log(f"Downloading from: {pdf_url}")
+                    response = self._get_with_429_retry(pdf_url, timeout=30, stream=True)
+                    response.raise_for_status()
+                    content_type = response.headers.get('content-type', '').lower()
+
+                    # Download with progress, reporting every 10% on its own line
+                    total_size = int(response.headers.get('content-length', 0))
+                    downloaded = 0
+                    last_reported = -1
+                    header_bytes = b''
+
+                    with open(filepath, 'wb') as f:
+                        for chunk in response.iter_content(chunk_size=8192):
+                            if chunk:
+                                f.write(chunk)
+                                downloaded += len(chunk)
+                                # Captured from the stream as it's written, not
+                                # by reopening filepath afterward -- there's a
+                                # separate, independent tool on this machine (a
+                                # Folder Action watching the output directory)
+                                # that renames a file shortly after it appears,
+                                # and confirmed live that it can win the race
+                                # against a re-open happening here: a real
+                                # download crashed with an unhandled
+                                # FileNotFoundError on this exact re-open,
+                                # because the file had already been renamed out
+                                # from under it by the time this ran. Reading
+                                # the header from what we just wrote sidesteps
+                                # that race entirely instead of trying to
+                                # tolerate it after the fact.
+                                if len(header_bytes) < 5:
+                                    header_bytes += chunk
+                                if total_size > 0:
+                                    progress = int((downloaded / total_size) * 100)
+                                    if progress >= last_reported + 10:
+                                        last_reported = progress
+                                        print(f"Downloading: {progress}%", flush=True)
+                    break  # succeeded
+                except (requests.exceptions.ConnectionError, requests.exceptions.Timeout) as e:
+                    if attempt < DOWNLOAD_STREAM_MAX_RETRIES:
+                        print(
+                            f"Connection dropped mid-download ({e.__class__.__name__}) -- "
+                            f"retrying ({attempt + 1}/{DOWNLOAD_STREAM_MAX_RETRIES})...",
+                            flush=True,
+                        )
+                        time.sleep(2)
+                        continue
+                    raise
 
             # Check if it's actually a PDF
-            content_type = response.headers.get('content-type', '').lower()
             self.log(f"Content-Type: {content_type}")
-
             if 'pdf' not in content_type and 'octet-stream' not in content_type:
                 print(f"⚠️  Warning: Response might not be a PDF (Content-Type: {content_type})", flush=True)
-
-            # Generate filename if not provided
-            if not filename:
-                doi = self.extract_doi(identifier)
-                # Clean DOI for filename
-                filename = re.sub(r'[^\w\-.]', '_', doi) + '.pdf'
-
-            if not filename.endswith('.pdf'):
-                filename += '.pdf'
-
-            filepath = self.output_dir / filename
-
-            # Download with progress, reporting every 10% on its own line
-            total_size = int(response.headers.get('content-length', 0))
-            downloaded = 0
-            last_reported = -1
-            header_bytes = b''
-
-            with open(filepath, 'wb') as f:
-                for chunk in response.iter_content(chunk_size=8192):
-                    if chunk:
-                        f.write(chunk)
-                        downloaded += len(chunk)
-                        # Captured from the stream as it's written, not by
-                        # reopening filepath afterward -- there's a separate,
-                        # independent tool on this machine (a Folder Action
-                        # watching the output directory) that renames a file
-                        # shortly after it appears, and confirmed live that it
-                        # can win the race against a re-open happening here:
-                        # a real download crashed with an unhandled
-                        # FileNotFoundError on this exact re-open, because the
-                        # file had already been renamed out from under it by
-                        # the time this ran. Reading the header from what we
-                        # just wrote sidesteps that race entirely instead of
-                        # trying to tolerate it after the fact.
-                        if len(header_bytes) < 5:
-                            header_bytes += chunk
-                        if total_size > 0:
-                            progress = int((downloaded / total_size) * 100)
-                            if progress >= last_reported + 10:
-                                last_reported = progress
-                                print(f"Downloading: {progress}%", flush=True)
 
             size_kb = downloaded / 1024
 
