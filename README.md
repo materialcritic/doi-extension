@@ -275,7 +275,7 @@ Click the toolbar icon on any page with a detected DOI to get:
 
 | Button | What it does |
 |---|---|
-| **Download** | Downloads the PDF (Sci-Hub → Unpaywall → publisher page, in that order) to your configured output folder. |
+| **Download** | Downloads the PDF (Sci-Hub → Unpaywall → publisher page, in that order) to your configured output folder. Switching tabs (which closes the popup) doesn't cancel it — it keeps running in the background, and reopening the popup on that same paper reconnects to show its progress/result instead of starting a second, duplicate download. |
 | **Copy DOI** | Copies the bare DOI string to your clipboard. |
 | **Copy Sci-Hub Link** | Resolves and copies the mirror URL without downloading anything. |
 | **View on Sci-Hub** | Opens the paper directly on a working Sci-Hub mirror in a new tab (auto-expands the PDF viewer to fill the tab). |

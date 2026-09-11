@@ -189,6 +189,11 @@ function showDOI(doi) {
       btnIssue.disabled = false;
     }
   });
+
+  // Last, so its (async) result correctly overrides the plain "idle, ready
+  // to download" state this function just set above, if a download for this
+  // DOI turns out to already be running.
+  checkForActiveDownload(doi);
 }
 
 function showEmpty() {
@@ -264,15 +269,17 @@ async function scanPage() {
   });
 }
 
-// Live progress lines forwarded from background.js while the script runs
-chrome.runtime.onMessage.addListener((message) => {
-  if (message.action === "progress") {
-    appendLog(message.line);
-  }
-});
+// reconnectedDownloadDoi is set (in checkForActiveDownload, called from
+// showDOI) when this popup opened/reopened to find a download already
+// running for the current DOI — e.g. it was started from a previous popup
+// instance that's since closed (switching tabs destroys the popup entirely,
+// but the download itself keeps running in the background). Its result
+// arrives via the "downloadResult" broadcast below rather than a direct
+// sendMessage callback, since this popup never made the original sendDOI
+// call itself.
+let reconnectedDownloadDoi = null;
 
-btnRun.addEventListener("click", () => {
-  if (!currentDOI) return;
+function startDownloadUIState() {
   clearLog();
   setStatus("Downloading…");
   btnRun.disabled = true;
@@ -280,48 +287,94 @@ btnRun.addEventListener("click", () => {
   corruptFilepath = null;
   btnReveal.classList.remove("visible");
   btnDeleteCorrupt.classList.remove("visible");
+}
 
-  chrome.runtime.sendMessage({ action: "sendDOI", doi: currentDOI }, (resp) => {
-    btnRun.disabled = false;
+// doi is passed explicitly rather than read off the currentDOI closure,
+// since this also applies a result arriving for a RECONNECTED download (see
+// above) — by the time that arrives, the popup could in principle have
+// already moved on to a different page's DOI. Skips applying anything in
+// that case rather than showing a stale/wrong status over whatever's
+// currently on screen.
+function applyDownloadResult(doi, resp) {
+  if (doi !== currentDOI) return;
+  btnRun.disabled = false;
 
-    if (!resp || !resp.success) {
-      const msg = resp?.error || "Unknown error";
-      setStatus("Failed: " + msg, "err");
-      appendLog(msg, true);
-      return;
+  if (!resp || !resp.success) {
+    const msg = resp?.error || "Unknown error";
+    setStatus("Failed: " + msg, "err");
+    appendLog(msg, true);
+    return;
+  }
+
+  const result = resp.result || {};
+  if (result.status === "ok") {
+    const filename = result.filepath ? result.filepath.split("/").pop() : null;
+    const sizeInfo = result.size_kb ? ` (${result.size_kb} KB)` : "";
+    const oaInfo = result.source === "open_access" ? " (open access)" : "";
+    setStatus(filename ? `Downloaded: ${filename}${sizeInfo}${oaInfo}` : `Done ✓${oaInfo}`, "ok");
+    if (result.filepath) {
+      lastFilepath = result.filepath;
+      btnReveal.classList.add("visible");
     }
+    // A successful Sci-Hub download proves availability regardless of
+    // what the earlier automatic check badged — flip the banner/badge
+    // rather than leave a stale "Not available" showing next to a paper
+    // that just downloaded fine. Doesn't apply to open_access downloads
+    // (Unpaywall/publisher-page tiers), which say nothing about Sci-Hub.
+    if (result.source !== "open_access") {
+      setAvailabilityUI("available");
+      chrome.runtime.sendMessage({ action: "updateAvailability", doi, tabId: currentTabId, status: "available" });
+    }
+  } else if (result.status === "corrupt") {
+    const filename = result.filepath ? result.filepath.split("/").pop() : null;
+    setStatus(`Not a valid PDF${filename ? ": " + filename : ""} — mirror likely served an error page`, "err");
+    if (result.filepath) {
+      corruptFilepath = result.filepath;
+      btnDeleteCorrupt.classList.add("visible");
+    }
+  } else {
+    setStatus("Failed: " + (result.detail || "Unknown error"), "err");
+    if (result.detail) appendLog(result.detail, true);
+  }
+}
 
-    const result = resp.result || {};
-    if (result.status === "ok") {
-      const filename = result.filepath ? result.filepath.split("/").pop() : null;
-      const sizeInfo = result.size_kb ? ` (${result.size_kb} KB)` : "";
-      const oaInfo = result.source === "open_access" ? " (open access)" : "";
-      setStatus(filename ? `Downloaded: ${filename}${sizeInfo}${oaInfo}` : `Done ✓${oaInfo}`, "ok");
-      if (result.filepath) {
-        lastFilepath = result.filepath;
-        btnReveal.classList.add("visible");
-      }
-      // A successful Sci-Hub download proves availability regardless of
-      // what the earlier automatic check badged — flip the banner/badge
-      // rather than leave a stale "Not available" showing next to a paper
-      // that just downloaded fine. Doesn't apply to open_access downloads
-      // (Unpaywall/publisher-page tiers), which say nothing about Sci-Hub.
-      if (result.source !== "open_access") {
-        setAvailabilityUI("available");
-        chrome.runtime.sendMessage({ action: "updateAvailability", doi: currentDOI, tabId: currentTabId, status: "available" });
-      }
-    } else if (result.status === "corrupt") {
-      const filename = result.filepath ? result.filepath.split("/").pop() : null;
-      setStatus(`Not a valid PDF${filename ? ": " + filename : ""} — mirror likely served an error page`, "err");
-      if (result.filepath) {
-        corruptFilepath = result.filepath;
-        btnDeleteCorrupt.classList.add("visible");
-      }
-    } else {
-      setStatus("Failed: " + (result.detail || "Unknown error"), "err");
-      if (result.detail) appendLog(result.detail, true);
+// Checks whether a download is already running for `doi` (started from a
+// now-closed popup instance, or a batch page) and, if so, reflects that in
+// the UI immediately instead of showing the normal idle "Download" button —
+// which would otherwise invite a second, wasteful parallel download of the
+// same paper. Called from showDOI() every time the popup lands on a DOI.
+function checkForActiveDownload(doi) {
+  chrome.runtime.sendMessage({ action: "getActiveDownload", doi }, (resp) => {
+    if (currentDOI !== doi) return; // popup moved on before this resolved
+    if (resp && resp.active) {
+      reconnectedDownloadDoi = doi;
+      startDownloadUIState();
+      setStatus("Downloading… (already in progress)");
     }
   });
+}
+
+// Live progress lines forwarded from background.js while the script runs,
+// plus the final result of a RECONNECTED download (see above) — a download
+// this popup started itself still gets its result via sendDOI's own
+// sendMessage callback, unaffected by this listener.
+chrome.runtime.onMessage.addListener((message) => {
+  if (message.action === "progress") {
+    appendLog(message.line);
+    return;
+  }
+  if (message.action === "downloadResult" && message.doi && message.doi === reconnectedDownloadDoi) {
+    reconnectedDownloadDoi = null;
+    const resp = message.error !== undefined ? { success: false, error: message.error } : { success: true, result: message.result };
+    applyDownloadResult(message.doi, resp);
+  }
+});
+
+btnRun.addEventListener("click", () => {
+  if (!currentDOI) return;
+  const doi = currentDOI;
+  startDownloadUIState();
+  chrome.runtime.sendMessage({ action: "sendDOI", doi }, (resp) => applyDownloadResult(doi, resp));
 });
 
 btnReveal.addEventListener("click", () => {

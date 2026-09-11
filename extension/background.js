@@ -843,6 +843,70 @@ function isRecentlyDownloaded(doi) {
   return typeof at === "number" && Date.now() - at < RECENT_DOWNLOAD_GUARD_MS;
 }
 
+// ---------------------------------------------------------------------------
+// In-flight download tracking, keyed by DOI, persisted to chrome.storage.local
+// (not just an in-memory Map, like recentDownloadSuccess above) — a Chrome
+// extension popup is destroyed entirely the instant it loses focus (e.g. the
+// user switches tabs), but the download itself keeps running here in the
+// background regardless. Without this, reopening the popup had no way to
+// know a download for the current DOI was already running: the button
+// re-enabled itself, a second click would start a wasteful parallel download
+// of the same paper, and the original download's eventual result had nowhere
+// to go once its originating popup was gone. getActiveDownload (below) lets
+// a freshly (re)opened popup check for this and reconnect instead.
+const ACTIVE_DOWNLOADS_KEY = "activeDownloads";
+// Comfortably past the native host's own worst-case timeout (180s watchdog +
+// up to 90s wait, ~270s) — anything older than this is almost certainly a
+// flag that never got cleared (the host crashed, Chrome was force-quit
+// mid-download, ...) rather than a real still-running download, so
+// getActiveDownload treats it as stale instead of leaving the popup stuck
+// thinking a long-dead download is still in progress forever.
+const ACTIVE_DOWNLOAD_MAX_AGE_MS = 10 * 60 * 1000;
+
+// Serializes every read-modify-write against ACTIVE_DOWNLOADS_KEY through one
+// promise chain — sendDOI can be firing concurrently from several different
+// pages/tabs at once (the popup on one tab, a batch page in another), and an
+// unserialized get-then-set from two of those landing close together could
+// silently drop one's update.
+let activeDownloadsOpQueue = Promise.resolve();
+
+function updateActiveDownloads(mutator) {
+  activeDownloadsOpQueue = activeDownloadsOpQueue.then(
+    () =>
+      new Promise((resolve) => {
+        chrome.storage.local.get({ [ACTIVE_DOWNLOADS_KEY]: {} }, (res) => {
+          const active = res[ACTIVE_DOWNLOADS_KEY];
+          mutator(active);
+          chrome.storage.local.set({ [ACTIVE_DOWNLOADS_KEY]: active }, resolve);
+        });
+      })
+  );
+  return activeDownloadsOpQueue;
+}
+
+function markDownloadActive(doi) {
+  if (!doi) return;
+  updateActiveDownloads((active) => {
+    active[doi] = { startedAt: Date.now() };
+  });
+}
+
+function clearDownloadActive(doi) {
+  if (!doi) return;
+  updateActiveDownloads((active) => {
+    delete active[doi];
+  });
+}
+
+// Broadcasts the final outcome of a sendDOI download to whatever's currently
+// listening — the same forwarding sendDOI's progress lines already use. This
+// is what lets a popup that RECONNECTED to an in-flight download (rather
+// than one that started it itself, which gets its result via the normal
+// sendResponse callback) actually learn how it turned out.
+function broadcastDownloadResult(doi, payload) {
+  chrome.runtime.sendMessage({ action: "downloadResult", doi, ...payload }, () => void chrome.runtime.lastError);
+}
+
 function runNextCheck() {
   if (checkInFlight || checkQueue.length === 0) return;
   const { doi, tabId, title, authors } = checkQueue.shift();
@@ -2461,6 +2525,8 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
   }
 
   if (request.action === "sendDOI") {
+    markDownloadActive(request.doi);
+
     getSettings().then((settings) => {
       const port = chrome.runtime.connectNative(NATIVE_HOST);
 
@@ -2483,6 +2549,8 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
 
         // Final result
         sendResponse({ success: true, result: message });
+        clearDownloadActive(request.doi);
+        broadcastDownloadResult(request.doi, { success: true, result: message });
         logEvent(message.status === "ok" ? "info" : "error", "background", "sendDOI result: " + (message.status || "unknown"), {
           doi: request.doi, status: message.status, detail: message.detail, filepath: message.filepath, source: message.source,
         });
@@ -2495,6 +2563,8 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
         if (err) {
           console.error("Native messaging error:", err.message);
           sendResponse({ success: false, error: err.message });
+          clearDownloadActive(request.doi);
+          broadcastDownloadResult(request.doi, { success: false, error: err.message });
           logEvent("error", "background", "sendDOI: native host disconnected with error", { doi: request.doi, error: err.message });
         }
       });
@@ -2503,6 +2573,15 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     });
 
     // Keep the message channel open until sendResponse is called
+    return true;
+  }
+
+  if (request.action === "getActiveDownload") {
+    chrome.storage.local.get({ [ACTIVE_DOWNLOADS_KEY]: {} }, (res) => {
+      const entry = res[ACTIVE_DOWNLOADS_KEY][request.doi];
+      const active = !!entry && Date.now() - entry.startedAt < ACTIVE_DOWNLOAD_MAX_AGE_MS;
+      sendResponse({ active });
+    });
     return true;
   }
 
