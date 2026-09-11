@@ -865,12 +865,27 @@ class SciHubDownloader:
             total_size = int(response.headers.get('content-length', 0))
             downloaded = 0
             last_reported = -1
+            header_bytes = b''
 
             with open(filepath, 'wb') as f:
                 for chunk in response.iter_content(chunk_size=8192):
                     if chunk:
                         f.write(chunk)
                         downloaded += len(chunk)
+                        # Captured from the stream as it's written, not by
+                        # reopening filepath afterward -- there's a separate,
+                        # independent tool on this machine (a Folder Action
+                        # watching the output directory) that renames a file
+                        # shortly after it appears, and confirmed live that it
+                        # can win the race against a re-open happening here:
+                        # a real download crashed with an unhandled
+                        # FileNotFoundError on this exact re-open, because the
+                        # file had already been renamed out from under it by
+                        # the time this ran. Reading the header from what we
+                        # just wrote sidesteps that race entirely instead of
+                        # trying to tolerate it after the fact.
+                        if len(header_bytes) < 5:
+                            header_bytes += chunk
                         if total_size > 0:
                             progress = int((downloaded / total_size) * 100)
                             if progress >= last_reported + 10:
@@ -879,8 +894,7 @@ class SciHubDownloader:
 
             size_kb = downloaded / 1024
 
-            with open(filepath, 'rb') as f:
-                header = f.read(5)
+            header = header_bytes[:5]
             if header != b'%PDF-':
                 print(f"⚠️  Downloaded file isn't a valid PDF (mirror likely served an error page): {filepath}", flush=True)
                 self.log_download(identifier, "CORRUPT", filepath=filepath, size_kb=size_kb, error="Missing %PDF- header", source=source)
@@ -897,6 +911,17 @@ class SciHubDownloader:
             print(f"❌ Download failed: {e}", flush=True)
             self.log_download(identifier, "FAILED", error=str(e), source=source)
             self.emit_result("error", detail=str(e), source=source)
+            return False
+        except OSError as e:
+            # Defense in depth alongside the header_bytes fix above: this
+            # still catches any *other* file-I/O surprise (disk full,
+            # permissions, the output folder disappearing mid-download) as a
+            # clean, reported error instead of an unhandled traceback
+            # escaping all the way up to main()'s own top-level handler,
+            # which a real user hit once for exactly this class of bug.
+            print(f"❌ File error while saving the download: {e}", flush=True)
+            self.log_download(identifier, "FAILED", error=str(e), source=source)
+            self.emit_result("error", detail=f"File error while saving the download: {e}", source=source)
             return False
 
 
