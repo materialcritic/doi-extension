@@ -266,21 +266,27 @@ async function downloadGroup(group, groupStatusEl, rowRefs) {
   groupStatusEl.className = "group-status active";
   groupStatusEl.textContent = `downloading 0/${queued}…`;
 
-  for (const { work, statusEl, checkbox } of rowRefs) {
-    if (work.removed) continue; // user unchecked it before its turn came up
+  let inFlight = 0;
+  const showGroupProgress = () => {
+    groupStatusEl.textContent = `${done + failed}/${queued} done, ${inFlight} downloading…`;
+  };
+
+  await runBatchPool(rowRefs, async ({ work, statusEl, checkbox }) => {
+    if (work.removed) return; // user unchecked it before its turn came up
 
     await waitWhilePaused();
     if (control.cancelled) {
       statusEl.textContent = "Skipped";
       checkbox.disabled = true;
-      continue;
+      return;
     }
 
     work.started = true; // too late to toggle once it's about to download
     checkbox.disabled = true;
     statusEl.textContent = "Downloading…";
     statusEl.className = "work-status active";
-    groupStatusEl.textContent = `downloading ${done + failed + 1}/${queued}…`;
+    inFlight += 1;
+    showGroupProgress();
 
     await new Promise((resolve) => {
       chrome.runtime.sendMessage({ action: "sendDOI", doi: work.doi, outputDirOverride: outputDir }, (resp) => {
@@ -310,11 +316,13 @@ async function downloadGroup(group, groupStatusEl, rowRefs) {
             line: `${timestamp} | ${status} | ${work.doi} | ${work.title} | ${detail}`,
           });
         }
+        inFlight -= 1;
+        showGroupProgress();
         updateStatusText();
         resolve();
       });
     });
-  }
+  });
 
   groupStatusEl.textContent = `${done} downloaded, ${failed} failed`;
   groupStatusEl.className = "group-status " + (failed > 0 ? "err" : "ok");

@@ -135,6 +135,7 @@
     .work-status.ok { color: var(--ok); }
     .work-status.err { color: var(--err); }
     .work-status.pending { color: var(--warn); }
+    .work-status.likely { color: var(--text-dim); font-style: italic; }
     #loading, #error, #empty, #no-matches { padding: 24px 4px; font-size: 13px; color: var(--text-dim); }
     #error { color: var(--err); }
     #error, #empty, #no-matches { display: none; }
@@ -191,6 +192,7 @@
 
   <script src="keywords.js"></script>
   <script src="path-utils.js"></script>
+  <script src="batch-utils.js"></script>
   <script src="trending.js"></script>
 </body>
 </html>

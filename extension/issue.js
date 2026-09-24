@@ -381,26 +381,28 @@ async function runDownload(indices) {
     return `${minutes}m ${seconds}s`;
   }
 
-  for (const i of indices) {
-    const work = displayWorks[i];
-    failedKeys.delete(workKey(work));
-
+  let inFlight = 0;
+  function updateBatchStatus() {
     const completed = done + failed;
-    const statusEl = document.getElementById("status-" + i);
-    statusEl.textContent = "Downloading…";
-    statusEl.className = "work-status pending";
     progressBar.style.width = Math.round((completed / indices.length) * 100) + "%";
-
     let etaText = "";
     if (completed > 0) {
       const avgMs = (Date.now() - batchStart) / completed;
-      const remaining = indices.length - completed;
-      etaText = ` — est. ${formatDuration(avgMs * remaining)} remaining`;
+      etaText = ` (est. ${formatDuration(avgMs * (indices.length - completed))} remaining)`;
     }
-    statusLineEl.textContent = `Downloading ${completed + 1} of ${indices.length}…${etaText}`;
+    statusLineEl.textContent = `Downloading — ${completed} of ${indices.length} done, ${inFlight} in progress${etaText}`;
+  }
 
-    // Sequential, not parallel — racing many DOIs against Sci-Hub mirrors at
-    // once makes them flaky.
+  await runBatchPool(indices, async (i) => {
+    const work = displayWorks[i];
+    failedKeys.delete(workKey(work));
+
+    const statusEl = document.getElementById("status-" + i);
+    statusEl.textContent = "Downloading…";
+    statusEl.className = "work-status pending";
+    inFlight += 1;
+    updateBatchStatus();
+
     await new Promise((resolve) => {
       chrome.runtime.sendMessage({ action: "sendDOI", doi: work.doi, outputDirOverride }, (resp) => {
         const result = resp && resp.result;
@@ -425,10 +427,12 @@ async function runDownload(indices) {
           const detail = (result && result.detail) || (resp && resp.error) || "unknown error";
           logLine(`FAILED | ${work.doi} | ${work.title} | ${detail}`);
         }
+        inFlight -= 1;
+        updateBatchStatus();
         resolve();
       });
     });
-  }
+  });
 
   logLine(`SUMMARY | ${done} downloaded, ${failed} failed, ${indices.length} total`);
   statusLineEl.textContent = `Done — ${done} downloaded, ${failed} failed. Saved to ${outputDirOverride}`;
@@ -601,11 +605,18 @@ async function downloadIssueGroup(control, row, label, folderKey, works) {
   let failed = 0;
   const failedWorks = [];
 
-  for (const work of works) {
-    await waitWhilePaused(control);
-    if (control.cancelled) return { done, failed, failedWorks, cancelled: true };
+  let cancelled = false;
+  let inFlight = 0;
+  const showProgress = () => {
+    row.textContent = `${label}: ${done + failed}/${works.length} done, ${inFlight} in progress…`;
+  };
 
-    row.textContent = `${label}: downloading ${done + failed + 1}/${works.length}…`;
+  await runBatchPool(works, async (work) => {
+    await waitWhilePaused(control);
+    if (control.cancelled) { cancelled = true; return; }
+
+    inFlight += 1;
+    showProgress();
 
     await new Promise((resolve) => {
       chrome.runtime.sendMessage({ action: "sendDOI", doi: work.doi, outputDirOverride: outputDir }, (resp) => {
@@ -629,12 +640,14 @@ async function downloadIssueGroup(control, row, label, folderKey, works) {
             line: `${timestamp} | ${status} | ${work.doi} | ${work.title} | ${detail}`,
           });
         }
+        inFlight -= 1;
+        showProgress();
         resolve();
       });
     });
-  }
+  });
 
-  return { done, failed, failedWorks, cancelled: false };
+  return { done, failed, failedWorks, cancelled };
 }
 
 // --- Batch Download Multiple Issues (volume range) --------------------------

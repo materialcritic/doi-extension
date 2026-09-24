@@ -64,6 +64,7 @@ function getDefaultOutputDir() {
 
 let works = [];
 let displayWorks = [];
+let hitRates = {};
 const selectedKeys = new Set();
 const alreadyDownloaded = new Set();
 const failedKeys = new Set();
@@ -204,6 +205,7 @@ function renderWorks() {
       status.textContent = "Already downloaded ✓";
       status.className = "work-status ok";
     }
+    markIfLikelyUnavailable(status, work.doi, hitRates);
 
     row.appendChild(checkbox);
     row.appendChild(vel);
@@ -320,24 +322,31 @@ async function runDownload(indices) {
   }
 
   let cancelled = false;
-  for (const i of indices) {
-    await waitWhilePaused(control);
-    if (control.cancelled) { cancelled = true; break; }
-
-    const work = displayWorks[i];
-    failedKeys.delete(workKey(work));
+  let inFlight = 0;
+  function updateBatchStatus() {
     const completed = done + failed;
-    const statusEl = document.getElementById("status-" + i);
-    statusEl.textContent = "Downloading…";
-    statusEl.className = "work-status pending";
     progressBar.style.width = Math.round((completed / indices.length) * 100) + "%";
-
     let etaText = "";
     if (completed > 0) {
       const avgMs = (Date.now() - batchStart) / completed;
-      etaText = ` — est. ${formatDuration(avgMs * (indices.length - completed))} remaining`;
+      etaText = ` (est. ${formatDuration(avgMs * (indices.length - completed))} remaining)`;
     }
-    statusLineEl.textContent = `Downloading ${completed + 1} of ${indices.length}…${etaText}`;
+    statusLineEl.textContent = `Downloading — ${completed} of ${indices.length} done, ${inFlight} in progress${etaText}`;
+  }
+
+  const ordered = orderForDownload(indices, (i) => displayWorks[i], hitRates);
+  await runBatchPool(ordered, async (i) => {
+    await waitWhilePaused(control);
+    if (control.cancelled) { cancelled = true; return; }
+
+    const work = displayWorks[i];
+    failedKeys.delete(workKey(work));
+    const statusEl = document.getElementById("status-" + i);
+    statusEl.textContent = "Downloading…";
+    statusEl.className = "work-status pending";
+    statusEl.removeAttribute("title");
+    inFlight += 1;
+    updateBatchStatus();
 
     await new Promise((resolve) => {
       chrome.runtime.sendMessage({ action: "sendDOI", doi: work.doi, outputDirOverride }, (resp) => {
@@ -356,10 +365,12 @@ async function runDownload(indices) {
           const detail = (result && result.detail) || (resp && resp.error) || "unknown error";
           logLine(`FAILED | ${work.doi} | ${work.title} | ${detail}`);
         }
+        inFlight -= 1;
+        updateBatchStatus();
         resolve();
       });
     });
-  }
+  });
 
   logLine(`SUMMARY | ${done} downloaded, ${failed} failed, ${indices.length} total${cancelled ? " (cancelled)" : ""}`);
   statusLineEl.textContent = cancelled
@@ -394,9 +405,13 @@ async function loadTrending() {
   loadingEl.style.display = "block";
   errorEl.style.display = "none"; emptyEl.style.display = "none"; listEl.style.display = "none";
 
-  const resp = await new Promise((res) =>
-    chrome.runtime.sendMessage({ action: "getTrendingWorks", topic: topicName, topicId, windowMonths }, res)
-  );
+  const [resp, rates] = await Promise.all([
+    new Promise((res) =>
+      chrome.runtime.sendMessage({ action: "getTrendingWorks", topic: topicName, topicId, windowMonths }, res)
+    ),
+    fetchPrefixHitRates(),
+  ]);
+  hitRates = rates;
   loadingEl.style.display = "none";
 
   if (!resp || !resp.success) {

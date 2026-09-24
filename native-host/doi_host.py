@@ -649,6 +649,38 @@ def _months_ago(dt, n):
     return dt.replace(year=year, month=month, day=day)
 
 
+def compute_prefix_hit_rates(lines):
+    """Per DOI-prefix (the publisher/registrant part, e.g. "10.4324") success
+    counts from download_log.txt lines, as {prefix: [ok, total]} -- feeds the
+    batch pages' "likely unavailable" ordering.
+
+    Only each DOI's *latest* outcome counts, so re-running a batch doesn't
+    inflate a prefix's miss count with the same papers over and over. Only
+    outcomes that say something about availability count: SUCCESS, CORRUPT
+    (the source handed back a non-PDF), and "No PDF found" failures. Transient
+    failures (network errors, Cloudflare blocks, timeouts) are ignored --
+    those say nothing about whether the publisher's papers exist to be had."""
+    latest = {}
+    for line in lines:
+        parts = line.rstrip("\n").split(" | ")
+        if len(parts) < 3:
+            continue
+        status, doi = parts[1], parts[2].strip().lower()
+        if not doi.startswith("10.") or "/" not in doi:
+            continue
+        if status == "SUCCESS":
+            latest[doi] = True
+        elif status == "CORRUPT" or (status == "FAILED" and "No PDF found" in line):
+            latest[doi] = False
+    rates = {}
+    for doi, ok in latest.items():
+        entry = rates.setdefault(doi.split("/", 1)[0], [0, 0])
+        entry[1] += 1
+        if ok:
+            entry[0] += 1
+    return rates
+
+
 def find_renamed_file(filepath):
     """Look up a rename for filepath via rename_log.csv, if one has happened.
 
@@ -996,6 +1028,15 @@ def main():
         send_message({"type": "result", "status": "ok", "downloads": recent})
         return
 
+    if message.get("action") == "prefix_hit_rates":
+        try:
+            with open(DOWNLOAD_LOG_PATH, encoding="utf-8", errors="replace") as f:
+                rates = compute_prefix_hit_rates(f)
+        except FileNotFoundError:
+            rates = {}
+        send_message({"type": "result", "status": "ok", "rates": rates})
+        return
+
     if message.get("action") == "download_stats":
         now = datetime.now()
         # _months_ago() computes the actual calendar-month boundary rather
@@ -1213,7 +1254,6 @@ def main():
     script_path = settings.get("scriptPath") or YOUR_SCRIPT
     output_dir = settings.get("outputDir")
     mirrors = settings.get("mirrors")
-    scidb_mirrors = settings.get("scidbMirrors")
     unpaywall_email = settings.get("unpaywallEmail")
 
     try:
@@ -1241,12 +1281,19 @@ def main():
         cmd += ["-d", output_dir]
     if mirrors:
         cmd += ["-m", ",".join(mirrors)]
-    if scidb_mirrors:
-        cmd += ["--scidb-mirrors", ",".join(scidb_mirrors)]
     if unpaywall_email:
         cmd += ["--email", unpaywall_email]
     if message.get("action") == "check":
         cmd += ["--check"]
+    # Cloudflare-challenge retry: background.js only sends these after
+    # opening a real Chrome tab at pdf_url and waiting for the user to
+    # clear the challenge there, so this run can skip straight to
+    # re-fetching that exact URL with the resulting cookies instead of
+    # redoing the whole mirror/OA search that already found it.
+    if message.get("pdfUrl"):
+        cmd += ["--pdf-url", message["pdfUrl"]]
+    if message.get("cfCookie"):
+        cmd += ["--cookie", message["cfCookie"]]
 
     # Full environment context right next to the actual spawn — the single
     # most useful line for diagnosing a platform-specific failure (which

@@ -132,6 +132,7 @@ btnOpenFolder.addEventListener("click", () => {
 // recomputeSelection(): repeatedly toggling the same row can never drift
 // out of sync this way.
 let allRows = [];
+let downloadOrder = [];
 
 function recomputeSelection() {
   totalWorks = allRows.filter(({ entry }) => !entry.removed).length;
@@ -226,19 +227,20 @@ async function downloadSelected() {
   const outputDir = joinOutputPath(baseOutputDir, folderName);
   const logPath = joinOutputPath(outputDir, "download_log.txt");
 
-  for (const { entry, statusEl, checkbox, row } of allRows) {
-    if (entry.removed) continue;
+  await runBatchPool(downloadOrder, async ({ entry, statusEl, checkbox }) => {
+    if (entry.removed) return;
 
     await waitWhilePaused();
     if (control.cancelled) {
       statusEl.textContent = "Skipped";
       checkbox.disabled = true;
-      continue;
+      return;
     }
 
     checkbox.disabled = true;
     statusEl.textContent = "Downloading…";
     statusEl.className = "work-status active";
+    statusEl.removeAttribute("title");
 
     await new Promise((resolve) => {
       chrome.runtime.sendMessage({ action: "sendDOI", doi: entry.doi, outputDirOverride: outputDir }, (resp) => {
@@ -271,7 +273,7 @@ async function downloadSelected() {
         resolve();
       });
     });
-  }
+  });
 
   btnPause.disabled = true;
   btnCancel.disabled = true;
@@ -347,7 +349,7 @@ async function init() {
 
   subtitleEl.textContent = `Found ${rawDois.length} DOI${rawDois.length === 1 ? "" : "s"} — fetching paper details…`;
 
-  const resolveResp = await resolveDoiList(rawDois);
+  const [resolveResp, hitRates] = await Promise.all([resolveDoiList(rawDois), fetchPrefixHitRates()]);
   loadingEl.style.display = "none";
 
   const entries = resolveResp.success ? resolveResp.entries : rawDois.map((doi) => ({ doi, title: null, author: "", journal: "", year: null, citations: null, notFound: false, error: true }));
@@ -355,8 +357,10 @@ async function init() {
   allRows = entries.map((entry) => {
     const built = buildRow(entry);
     listEl.appendChild(built.row);
+    markIfLikelyUnavailable(built.statusEl, entry.doi, hitRates);
     return built;
   });
+  downloadOrder = orderForDownload(allRows, (r) => r.entry, hitRates);
 
   totalWorks = allRows.filter(({ entry }) => !entry.removed).length;
   const summary = `${entries.length} DOI${entries.length === 1 ? "" : "s"} found on ${isPdfSource ? "this PDF" : "this page"} — ${sourceLabel}`;

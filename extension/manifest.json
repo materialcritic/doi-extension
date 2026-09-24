@@ -10,14 +10,17 @@
     "storage",
     "notifications",
     "alarms",
-    "contextMenus"
+    "contextMenus",
+    "cookies",
+    "downloads"
   ],
   "host_permissions": [
     "https://api.crossref.org/*",
     "https://api.semanticscholar.org/*",
     "https://api.openalex.org/*",
     "https://pub.orcid.org/*",
-    "https://www.gravatar.com/*"
+    "https://www.gravatar.com/*",
+    "https://sci.bban.top/*"
   ],
   "content_security_policy": {
     "extension_pages": "script-src 'self'; object-src 'none'; base-uri 'none'"

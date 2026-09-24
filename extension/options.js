@@ -14,27 +14,21 @@ const outputDirEl = document.getElementById("output-dir");
 const pythonBinEl = document.getElementById("python-bin");
 const scriptPathEl = document.getElementById("script-path");
 const mirrorsEl = document.getElementById("mirrors");
-const scidbMirrorsEl = document.getElementById("scidb-mirrors");
 const unpaywallEmailEl = document.getElementById("unpaywall-email");
 const savedEl = document.getElementById("saved");
 
 function load() {
-  chrome.storage.sync.get(["outputDir", "pythonBin", "scriptPath", "mirrors", "scidbMirrors", "unpaywallEmail"], (settings) => {
+  chrome.storage.sync.get(["outputDir", "pythonBin", "scriptPath", "mirrors", "unpaywallEmail"], (settings) => {
     outputDirEl.value = settings.outputDir || "";
     pythonBinEl.value = settings.pythonBin || "";
     scriptPathEl.value = settings.scriptPath || "";
     mirrorsEl.value = (settings.mirrors || []).join("\n");
-    scidbMirrorsEl.value = (settings.scidbMirrors || []).join("\n");
     unpaywallEmailEl.value = settings.unpaywallEmail || "";
   });
 }
 
 function save() {
   const mirrors = mirrorsEl.value
-    .split("\n")
-    .map((m) => m.trim())
-    .filter(Boolean);
-  const scidbMirrors = scidbMirrorsEl.value
     .split("\n")
     .map((m) => m.trim())
     .filter(Boolean);
@@ -45,7 +39,6 @@ function save() {
       pythonBin: pythonBinEl.value.trim(),
       scriptPath: scriptPathEl.value.trim(),
       mirrors,
-      scidbMirrors,
       unpaywallEmail: unpaywallEmailEl.value.trim(),
     },
     () => {
@@ -56,7 +49,7 @@ function save() {
 }
 
 function reset() {
-  chrome.storage.sync.remove(["outputDir", "pythonBin", "scriptPath", "mirrors", "scidbMirrors", "unpaywallEmail"], load);
+  chrome.storage.sync.remove(["outputDir", "pythonBin", "scriptPath", "mirrors", "unpaywallEmail"], load);
 }
 
 document.getElementById("btn-save").addEventListener("click", save);

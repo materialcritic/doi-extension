@@ -41,6 +41,12 @@ MIRROR_HEALTH_PATH = Path(__file__).resolve().parent / 'mirror_health.json'
 UNPAYWALL_EMAIL = '111hui@protonmail.com'
 MIRROR_COOLDOWN_MINUTES = 10
 MIRROR_FAIL_THRESHOLD = 3
+# Once the mirrors that did answer have all come back empty, a still-silent
+# mirror gets this long (2x the slowest answer, clamped) before the race is
+# called a miss -- instead of its full 15s request timeout.
+RACE_STRAGGLER_GRACE_FACTOR = 2
+RACE_STRAGGLER_MIN_GRACE_S = 3
+RACE_STRAGGLER_MAX_GRACE_S = 10
 MIRROR_HEALTH_MAX_AGE_DAYS = 4
 # Samples kept per hour-of-day bucket — enough to smooth out one-off blips
 # without mirror_health.json growing unbounded over months of use.
@@ -200,28 +206,20 @@ class SciHubDownloader:
         'https://sci-hub.su',
     ]
 
-    # Anna's Archive / SciDB mirror domains, tried in order. These rotate under
-    # legal pressure, so keep this list current. The user-supplied .pk domain is
-    # first, with longer-lived ones as fallbacks. SciDB is the *last* source tried
-    # (after Sci-Hub, Unpaywall, and the publisher page), so a slow or dead domain
-    # here only ever delays the final "not available" answer.
-    SCIDB_MIRRORS = [
-        'https://annas-archive.gd',
-        'https://annas-archive.pk',
-        'https://annas-archive.gl',
-        'https://annas-archive.li',
-    ]
-
-    def __init__(self, output_dir='papers', verbose=False, mirrors=None, unpaywall_email=None, scidb_mirrors=None):
+    def __init__(self, output_dir='papers', verbose=False, mirrors=None, unpaywall_email=None):
         self.output_dir = Path(output_dir)
         self.output_dir.mkdir(parents=True, exist_ok=True)
         self.verbose = verbose
         if mirrors:
             self.SCIHUB_URLS = mirrors
-        if scidb_mirrors:
-            self.SCIDB_MIRRORS = scidb_mirrors
         self.unpaywall_email = unpaywall_email or UNPAYWALL_EMAIL
         self._captcha_hits = 0
+        # Which mirror's _try_mirror() call actually produced the pdf_url
+        # get_pdf_url() returned -- set in _race_mirrors_once(), read back in
+        # download_pdf() so a Cloudflare challenge discovered later, at
+        # actual file-fetch time, can still be attributed to the mirror that
+        # routed to it for mirror-health purposes.
+        self._last_source_mirror = None
         self.session = requests.Session()
         self.session.headers.update({
             'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
@@ -266,6 +264,26 @@ class SciHubDownloader:
     # stay stable if Sci-Hub swaps the underlying challenge provider again.
     CAPTCHA_MARKER = 'are you are robot'
 
+    @staticmethod
+    def _is_cloudflare_challenge(response):
+        """True if `response` is Cloudflare's own bot-challenge interstitial
+        rather than a real answer from the site behind it -- confirmed live
+        against a real, reported failure: a Sci-Hub mirror's actual PDF
+        file-serving backend (sci.bban.top, which some sci-hub.* mirrors
+        embed the real download URL from) started returning this instead of
+        the file, surfacing to the user as a bare, confusing "403 Client
+        Error: Forbidden" with no indication of what actually happened.
+        Detected via Cloudflare's own `cf-mitigated: challenge` response
+        header, which it sets specifically for this case regardless of the
+        HTTP status code used (403 here; can also be 503 or others) -- far
+        more reliable than sniffing the challenge page's HTML/JS, which
+        Cloudflare changes often. No bare `requests` call can solve this
+        (it needs a real browser executing JS), same structural block
+        already documented for Tandfonline/PhilPapers/SAGE elsewhere in
+        this file -- the fix here is a clear, honest error message, not an
+        attempt to get past it."""
+        return response.headers.get('cf-mitigated', '').lower() == 'challenge'
+
     def _try_mirror(self, base_url, doi):
         """Attempt to resolve a PDF URL from a single mirror. Returns pdf_url or None."""
         try:
@@ -275,6 +293,11 @@ class SciHubDownloader:
 
             response = self.session.get(url, timeout=15, allow_redirects=True)
             self.log(f"Status code: {response.status_code}")
+
+            if self._is_cloudflare_challenge(response):
+                self.log(f"{base_url} served a Cloudflare bot-challenge, not a result")
+                self._captcha_hits += 1
+                return None
 
             if response.status_code != 200:
                 self.log("Non-200 status, skipping")
@@ -387,9 +410,9 @@ class SciHubDownloader:
         if self._captcha_hits:
             print(
                 f"\n(Note: {self._captcha_hits} Sci-Hub mirror response(s) were a "
-                "bot-check page rather than a definitive answer — this paper may "
-                "still be on Sci-Hub; trying again in a few minutes sometimes "
-                "succeeds.)",
+                "bot-check or Cloudflare challenge page rather than a definitive "
+                "answer — this paper may still be on Sci-Hub; trying again in a "
+                "few minutes sometimes succeeds.)",
                 flush=True,
             )
         return None
@@ -427,8 +450,16 @@ class SciHubDownloader:
             threading.Thread(target=worker, args=(mirror,), daemon=True).start()
 
         result = None
-        for _ in range(len(candidates)):
-            mirror, pdf_url, elapsed_ms = result_queue.get()
+        answered = set()
+        deadline = None
+        slowest_ms = 0
+        while len(answered) < len(candidates):
+            timeout = None if deadline is None else max(0.0, deadline - time.time())
+            try:
+                mirror, pdf_url, elapsed_ms = result_queue.get(timeout=timeout)
+            except queue.Empty:
+                break
+            answered.add(mirror)
             entry = health.setdefault(mirror, {'fail_count': 0, 'last_failed': None})
             entry['last_latency_ms'] = elapsed_ms
             entry['last_seen'] = datetime.now().isoformat()
@@ -447,10 +478,28 @@ class SciHubDownloader:
                 entry['fail_count'] = 0
                 entry['last_failed'] = None
                 result = pdf_url
+                self._last_source_mirror = mirror
                 break  # first success wins — don't wait for the rest
             else:
                 entry['fail_count'] = entry.get('fail_count', 0) + 1
                 entry['last_failed'] = datetime.now().isoformat()
+                slowest_ms = max(slowest_ms, elapsed_ms)
+                grace = min(RACE_STRAGGLER_MAX_GRACE_S,
+                            max(RACE_STRAGGLER_MIN_GRACE_S, RACE_STRAGGLER_GRACE_FACTOR * slowest_ms / 1000))
+                deadline = time.time() + grace
+
+        if result is None:
+            # Counted as a failure so a mirror that stays dead reaches the
+            # cooldown threshold and gets skipped outright on later races.
+            now = datetime.now().isoformat()
+            for mirror in candidates:
+                if mirror in answered:
+                    continue
+                self.log(f"{mirror} didn't answer in time; not waiting for it")
+                entry = health.setdefault(mirror, {'fail_count': 0, 'last_failed': None})
+                entry['fail_count'] = entry.get('fail_count', 0) + 1
+                entry['last_failed'] = now
+                entry['last_seen'] = now
 
         save_mirror_health(health)
         return result
@@ -523,154 +572,22 @@ class SciHubDownloader:
             self.log(f"Publisher page fetch failed: {e}")
             return None
 
-    def get_scidb_pdf_url(self, doi):
-        """Final fallback: resolve a DOI to a PDF via Anna's Archive (SciDB).
-
-        Tried only after Sci-Hub, Unpaywall, and the publisher page have all come
-        up empty. Returns a directly-downloadable PDF URL, or None.
-
-        Like the Unpaywall resolver, this validates that the candidate is a real
-        PDF *before* returning it, so a SciDB viewer/landing page is never handed
-        back to download_pdf() and misreported as "Corrupt" -- a miss here should
-        fall through cleanly to the final "not available" result.
-
-        NOTE: SciDB's page markup and download URLs change fairly often, and some
-        Anna's Archive domains sit behind a Cloudflare bot-challenge that blocks
-        plain server-side fetches (the same wall this tool already hits on
-        tandfonline etc.). When that happens, every candidate simply fails
-        validation and this returns None. If SciDB stops resolving, the selectors
-        in _extract_scidb_candidates() are the thing to update first.
-        """
-        doi = self.extract_doi(doi)
+    def _penalize_mirror_for_challenge(self, mirror):
+        """Cloudflare challenging the pdf_url a mirror produced is a real
+        failure signal for mirror-health purposes, even though _try_mirror()
+        itself already returned successfully -- the failure only shows up
+        one step later, at actual download time. Feeding it back into the
+        same fail_count/cooldown bookkeeping _race_mirrors_once() already
+        uses lets future races naturally steer toward a mirror whose
+        embedded file backend isn't (right now) Cloudflare-gated, without
+        hardcoding sci.bban.top or any other backend domain by name."""
+        if not mirror:
+            return
         health = load_mirror_health()
-        try:
-            for base_url in self.SCIDB_MIRRORS:
-                start = time.time()
-                try:
-                    page_url = f"{base_url}/scidb/{quote(doi)}"
-                    print(f"Trying Anna's Archive (SciDB): {base_url}...", flush=True)
-                    self.log(f"Requesting SciDB page: {page_url}")
-                    resp = self.session.get(page_url, timeout=20, allow_redirects=True)
-                    elapsed_ms = round((time.time() - start) * 1000)
-                    if resp.status_code != 200:
-                        self.log(f"SciDB status {resp.status_code} on {base_url}")
-                        self._record_scidb_health(health, base_url, elapsed_ms, success=False)
-                        continue
-
-                    candidates = self._extract_scidb_candidates(resp, base_url)
-                    found = None
-                    for cand in candidates:
-                        self.log(f"SciDB candidate: {cand}")
-                        if self._scidb_candidate_is_pdf(cand, referer=page_url):
-                            self.log(f"SciDB validated PDF: {cand}")
-                            found = cand
-                            break
-                    self._record_scidb_health(health, base_url, elapsed_ms, success=bool(found))
-                    if found:
-                        return found
-                    self.log(f"No valid PDF found via {base_url}")
-                except requests.RequestException as e:
-                    elapsed_ms = round((time.time() - start) * 1000)
-                    self.log(f"SciDB request failed on {base_url}: {e}")
-                    self._record_scidb_health(health, base_url, elapsed_ms, success=False)
-                    continue
-                except Exception as e:
-                    elapsed_ms = round((time.time() - start) * 1000)
-                    self.log(f"SciDB error on {base_url}: {e}")
-                    self._record_scidb_health(health, base_url, elapsed_ms, success=False)
-                    continue
-            return None
-        finally:
-            save_mirror_health(health)
-
-    def _record_scidb_health(self, health, mirror, elapsed_ms, success):
-        """Tracks Anna's Archive (SciDB) mirrors in the same mirror_health.json
-        file/schema already used for Sci-Hub mirrors (fail_count/last_failed/
-        last_latency_ms/latency_history/last_seen) -- Settings' Mirror Health
-        panel and doi_host.py's mirror_health action just list whatever URLs
-        are in the file, with no Sci-Hub-specific assumption, so this is all
-        that's needed for SciDB mirrors to show up there too. Deliberately
-        skips latency_by_hour/is_mirror_unhealthy-style cooldown skipping --
-        those exist for Sci-Hub's parallel mirror race (item 70's time-of-day
-        seeding); this tier is a plain sequential fallback, not raced."""
         entry = health.setdefault(mirror, {'fail_count': 0, 'last_failed': None})
-        entry['last_latency_ms'] = elapsed_ms
-        entry['last_seen'] = datetime.now().isoformat()
-        history = entry.setdefault('latency_history', [])
-        history.append(elapsed_ms)
-        del history[:-20]
-        if success:
-            entry['fail_count'] = 0
-            entry['last_failed'] = None
-        else:
-            entry['fail_count'] = entry.get('fail_count', 0) + 1
-            entry['last_failed'] = datetime.now().isoformat()
-
-    def _extract_scidb_candidates(self, response, base_url):
-        """Pull possible direct-PDF URLs out of a SciDB page, best guess first.
-
-        Deliberately broad and ordered most- to least-specific, mirroring the
-        multi-method approach in _try_mirror(). Every candidate is validated by
-        the caller before use, so over-collecting here is cheap."""
-        soup = BeautifulSoup(response.content, 'html.parser')
-        candidates = []
-
-        def add(url):
-            if not url:
-                return
-            full = self._normalize_url(url, response.url or base_url)
-            if full and full not in candidates:
-                candidates.append(full)
-
-        # 1. Embedded viewer iframe pointing at the file (common SciDB layout)
-        for iframe in soup.find_all('iframe', src=True):
-            src = iframe['src']
-            low = src.lower()
-            if '.pdf' in low or '/scidb/' in low or 'download' in low:
-                add(src)
-
-        # 2. <embed>/<object> PDF viewers
-        for tag in soup.find_all(['embed', 'object']):
-            src = tag.get('src') or tag.get('data')
-            if src and ('.pdf' in src.lower() or 'download' in src.lower()):
-                add(src)
-
-        # 3. Explicit download / .pdf anchor links
-        for a in soup.find_all('a', href=True):
-            href = a['href']
-            low = href.lower()
-            if '.pdf' in low or 'download' in low or '/scidb/' in low:
-                add(href)
-
-        # 4. Bare PDF URLs anywhere in the page source
-        for m in re.findall(r'https?://[^\s\'"<>]+\.pdf[^\s\'"<>]*', response.text):
-            add(m)
-
-        return candidates
-
-    def _scidb_candidate_is_pdf(self, url, referer=None):
-        """Fetch just enough of `url` to confirm it's a real PDF (Content-Type
-        says so, or the bytes start with the %PDF- magic number), so a viewer or
-        HTML page is never returned as a downloadable file. Returns True/False."""
-        headers = {'Referer': referer} if referer else {}
-        try:
-            r = self.session.get(url, headers=headers, timeout=20,
-                                 stream=True, allow_redirects=True)
-            if r.status_code != 200:
-                r.close()
-                return False
-            ctype = r.headers.get('content-type', '').lower()
-            if 'pdf' in ctype or 'octet-stream' in ctype:
-                r.close()
-                return True
-            if 'html' in ctype or 'text' in ctype:
-                r.close()
-                return False
-            first = next(r.iter_content(chunk_size=5), b'')
-            r.close()
-            return first[:5] == b'%PDF-'
-        except requests.RequestException:
-            return False
+        entry['fail_count'] = entry.get('fail_count', 0) + 1
+        entry['last_failed'] = datetime.now().isoformat()
+        save_mirror_health(health)
 
     def _normalize_url(self, url, base_url):
         """Normalize PDF URL to absolute URL"""
@@ -736,8 +653,8 @@ class SciHubDownloader:
             return
 
         # A PDF opened directly in Chrome from a local file (drag-and-drop, a
-        # file:// link, or a previous Sci-Hub/Unpaywall/SciDB download opened
-        # back up) has a file:// tab URL, not an http(s) one -- requests has
+        # file:// link, or a previous download opened back up) has a
+        # file:// tab URL, not an http(s) one -- requests has
         # no adapter for that scheme at all ("No connection adapters were
         # found for 'file://...'"), confirmed live against a real local PDF.
         # Read it straight off disk in that case instead of trying to GET it.
@@ -797,12 +714,24 @@ class SciHubDownloader:
         print(f"Found {len(dois)} DOI(s).", flush=True)
         self.emit_result("ok", dois=dois)
 
-    def download_pdf(self, identifier, filename=None):
-        """Download the PDF file"""
+    def download_pdf(self, identifier, filename=None, pdf_url_override=None, extra_cookie=None):
+        """Download the PDF file.
+
+        pdf_url_override/extra_cookie back the Cloudflare-challenge retry
+        flow: background.js opens a real Chrome tab at the URL a first
+        attempt got challenged on, waits for the user to clear it, then
+        re-invokes this whole script with the resulting cookies so this
+        run can skip straight to the actual file fetch instead of
+        re-running the mirror/OA search that already found this exact URL.
+        """
         print(f"Searching for: {identifier}", flush=True)
 
-        pdf_url = self.get_pdf_url(identifier)
-        source = 'scihub'
+        if pdf_url_override:
+            pdf_url = pdf_url_override
+            source = 'scihub'
+        else:
+            pdf_url = self.get_pdf_url(identifier)
+            source = 'scihub'
 
         if not pdf_url:
             doi = self.extract_doi(identifier)
@@ -815,14 +744,8 @@ class SciHubDownloader:
                 print("Not on Unpaywall — checking the publisher page directly...", flush=True)
                 pdf_url = self.get_oa_pdf_url_publisher(doi)
 
-            if not pdf_url:
-                print("Not open-access anywhere — trying Anna's Archive (SciDB) as a last resort...", flush=True)
-                pdf_url = self.get_scidb_pdf_url(doi)
-                if pdf_url:
-                    source = 'scidb'
-
         if not pdf_url:
-            print("\n❌ Could not find paper on Sci-Hub, as an open-access copy, or on Anna's Archive.", flush=True)
+            print("\n❌ Could not find paper on Sci-Hub or as an open-access copy.", flush=True)
             print("\nPossible reasons:", flush=True)
             print("  • The paper might not be in Sci-Hub's database", flush=True)
             print("  • It isn't openly available anywhere Unpaywall or the publisher page expose", flush=True)
@@ -832,8 +755,8 @@ class SciHubDownloader:
             print("  • Using a VPN", flush=True)
             print("  • Checking the DOI is correct", flush=True)
             print("  • Trying again later", flush=True)
-            self.log_download(identifier, "FAILED", error="No PDF found on Sci-Hub, open-access, or Anna's Archive")
-            self.emit_result("error", detail="No PDF found on Sci-Hub, open-access, or Anna's Archive")
+            self.log_download(identifier, "FAILED", error="No PDF found on Sci-Hub or open-access")
+            self.emit_result("error", detail="No PDF found on Sci-Hub or open-access")
             return False
 
         print(f"Found PDF at: {pdf_url}" + (" (open access)" if source == 'open_access' else ""), flush=True)
@@ -868,7 +791,37 @@ class SciHubDownloader:
             for attempt in range(DOWNLOAD_STREAM_MAX_RETRIES + 1):
                 try:
                     self.log(f"Downloading from: {pdf_url}")
-                    response = self._get_with_429_retry(pdf_url, timeout=30, stream=True)
+                    request_headers = {'Cookie': extra_cookie} if extra_cookie else None
+                    response = self._get_with_429_retry(pdf_url, timeout=30, stream=True, headers=request_headers)
+                    if self._is_cloudflare_challenge(response):
+                        # Not a real access denial -- Cloudflare itself is
+                        # blocking this specific request with its own
+                        # bot-challenge interstitial (confirmed via curl
+                        # against a live failure), which no background
+                        # request can solve on its own. Reported as its own
+                        # distinct result status (not folded into the
+                        # generic error path below) so background.js can
+                        # offer the one thing that *can* solve it -- a real
+                        # Chrome tab for the user to clear the challenge in
+                        # -- instead of just surfacing a bare
+                        # "403 Client Error: Forbidden". extra_cookie being
+                        # set here means this already *is* that retry
+                        # attempt (background.js only sets it after the
+                        # user cleared a challenge) -- still reported the
+                        # same way rather than silently failing, so the
+                        # caller can decide whether to give up rather than
+                        # looping the tab-and-wait dance forever.
+                        self.log(f"{pdf_url} served a Cloudflare bot-challenge instead of the file")
+                        self.log_download(identifier, "FAILED", error="Cloudflare bot-challenge")
+                        if source == 'scihub' and not extra_cookie:
+                            self._penalize_mirror_for_challenge(self._last_source_mirror)
+                        self.emit_result(
+                            "cloudflare_challenge",
+                            pdf_url=pdf_url,
+                            doi=self.extract_doi(identifier),
+                            retried=bool(extra_cookie),
+                        )
+                        return False
                     response.raise_for_status()
                     content_type = response.headers.get('content-type', '').lower()
 
@@ -926,6 +879,17 @@ class SciHubDownloader:
             header = header_bytes[:5]
             if header != b'%PDF-':
                 print(f"⚠️  Downloaded file isn't a valid PDF (mirror likely served an error page): {filepath}", flush=True)
+                # Delete it rather than leaving a bogus HTML-as-".pdf" file
+                # sitting in the output folder -- confirmed from a real
+                # user's folder that this was never happening: the CORRUPT
+                # status was being logged and reported correctly, but the
+                # file itself was left on disk, where a separate auto-rename
+                # tool would then rename it to the paper's title, making a
+                # known-bad file look like a real, successful download.
+                try:
+                    filepath.unlink(missing_ok=True)
+                except OSError as e:
+                    self.log(f"Couldn't remove corrupt file {filepath}: {e}")
                 self.log_download(identifier, "CORRUPT", filepath=filepath, size_kb=size_kb, error="Missing %PDF- header", source=source)
                 self.emit_result("corrupt", filepath=str(filepath), size_kb=round(size_kb, 1), source=source)
                 return False
@@ -983,10 +947,6 @@ def main():
         help='Comma-separated list of Sci-Hub mirror URLs to use instead of the default list'
     )
     parser.add_argument(
-        '--scidb-mirrors',
-        help="Comma-separated list of Anna's Archive (SciDB) mirror URLs to use instead of the default list"
-    )
-    parser.add_argument(
         '--check',
         action='store_true',
         help='Only check whether a PDF is available, without downloading it'
@@ -999,12 +959,19 @@ def main():
         '--scan-pdf-url',
         help='Download the PDF at this URL and scan its text for every DOI-shaped token, instead of downloading a single paper'
     )
+    parser.add_argument(
+        '--pdf-url',
+        help='Skip the mirror/open-access search and download directly from this URL -- used to retry a download after a Cloudflare challenge on it was cleared in a browser tab'
+    )
+    parser.add_argument(
+        '--cookie',
+        help='Raw Cookie header to send with --pdf-url (the cookies captured from the browser tab after clearing a Cloudflare challenge)'
+    )
 
     args = parser.parse_args()
 
     mirrors = [m.strip() for m in args.mirrors.split(',') if m.strip()] if args.mirrors else None
-    scidb_mirrors = [m.strip() for m in args.scidb_mirrors.split(',') if m.strip()] if args.scidb_mirrors else None
-    downloader = SciHubDownloader(output_dir=args.directory, verbose=args.verbose, mirrors=mirrors, unpaywall_email=args.email, scidb_mirrors=scidb_mirrors)
+    downloader = SciHubDownloader(output_dir=args.directory, verbose=args.verbose, mirrors=mirrors, unpaywall_email=args.email)
 
     if args.scan_pdf_url:
         downloader.scan_pdf_for_dois(args.scan_pdf_url)
@@ -1029,7 +996,7 @@ def main():
             downloader.emit_result("unavailable")
             sys.exit(1)
 
-    success = downloader.download_pdf(args.identifier, filename=args.output)
+    success = downloader.download_pdf(args.identifier, filename=args.output, pdf_url_override=args.pdf_url, extra_cookie=args.cookie)
 
     sys.exit(0 if success else 1)
 

@@ -99,6 +99,7 @@ function getDefaultOutputDir() {
 }
 
 let works = []; // master list, Crossref relevance order — never reordered
+let hitRates = {};
 let displayWorks = []; // current sorted view, rendered from
 const selectedKeys = new Set(); // work.doi (or title as fallback) for works checked to download
 const alreadyDownloaded = new Set(); // doi -> previously SUCCEEDED per the author's own log
@@ -371,6 +372,7 @@ function renderWorks() {
       status.textContent = "Already downloaded ✓";
       status.className = "work-status ok";
     }
+    markIfLikelyUnavailable(status, work.doi, hitRates);
 
     row.appendChild(checkbox);
     row.appendChild(info);
@@ -523,29 +525,33 @@ async function runDownload(indices) {
   }
 
   let cancelled = false;
-  for (const i of indices) {
+  let inFlight = 0;
+  function updateBatchStatus() {
+    const completed = done + failed;
+    progressBar.style.width = Math.round((completed / indices.length) * 100) + "%";
+    let etaText = "";
+    if (completed > 0) {
+      const avgMs = (Date.now() - batchStart) / completed;
+      etaText = ` (est. ${formatDuration(avgMs * (indices.length - completed))} remaining)`;
+    }
+    statusLineEl.textContent = `Downloading — ${completed} of ${indices.length} done, ${inFlight} in progress${etaText}`;
+  }
+
+  const ordered = orderForDownload(indices, (i) => displayWorks[i], hitRates);
+  await runBatchPool(ordered, async (i) => {
     await waitWhilePaused(control);
-    if (control.cancelled) { cancelled = true; break; }
+    if (control.cancelled) { cancelled = true; return; }
 
     const work = displayWorks[i];
     failedKeys.delete(workKey(work));
 
-    const completed = done + failed;
     const statusEl = document.getElementById("status-" + i);
     statusEl.textContent = "Downloading…";
     statusEl.className = "work-status pending";
-    progressBar.style.width = Math.round((completed / indices.length) * 100) + "%";
+    statusEl.removeAttribute("title");
+    inFlight += 1;
+    updateBatchStatus();
 
-    let etaText = "";
-    if (completed > 0) {
-      const avgMs = (Date.now() - batchStart) / completed;
-      const remaining = indices.length - completed;
-      etaText = ` — est. ${formatDuration(avgMs * remaining)} remaining`;
-    }
-    statusLineEl.textContent = `Downloading ${completed + 1} of ${indices.length}…${etaText}`;
-
-    // Sequential, not parallel — same reasoning as the badge-check queue:
-    // racing many DOIs against Sci-Hub mirrors at once makes them flaky.
     await new Promise((resolve) => {
       chrome.runtime.sendMessage({ action: "sendDOI", doi: work.doi, outputDirOverride }, (resp) => {
         const result = resp && resp.result;
@@ -569,10 +575,12 @@ async function runDownload(indices) {
           const detail = (result && result.detail) || (resp && resp.error) || "unknown error";
           logLine(`FAILED | ${work.doi} | ${work.title} | ${detail}`);
         }
+        inFlight -= 1;
+        updateBatchStatus();
         resolve();
       });
     });
-  }
+  });
 
   logLine(`SUMMARY | ${done} downloaded, ${failed} failed, ${indices.length} total${cancelled ? " (cancelled)" : ""}`);
   statusLineEl.textContent = cancelled
@@ -624,10 +632,12 @@ async function init() {
   await resolveOutputPaths();
   initWatchAuthorButton();
 
-  const [searchResp, logResp] = await Promise.all([
+  const [searchResp, logResp, rates] = await Promise.all([
     new Promise((resolve) => chrome.runtime.sendMessage({ action: "searchAuthorWorks", author: authorName }, resolve)),
     new Promise((resolve) => chrome.runtime.sendMessage({ action: "readLog", filepath: logPath }, resolve)),
+    fetchPrefixHitRates(),
   ]);
+  hitRates = rates;
 
   loadingEl.style.display = "none";
 

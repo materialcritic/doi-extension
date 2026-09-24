@@ -237,3 +237,36 @@ class TestMonthsAgo:
         old_cutoff = now - timedelta(days=30 * 7)
         new_cutoff = doi_host._months_ago(now, 7)
         assert old_cutoff != new_cutoff
+
+
+# ---------------------------------------------------------------------------
+# compute_prefix_hit_rates (batch "likely unavailable" ordering)
+# ---------------------------------------------------------------------------
+
+class TestComputePrefixHitRates:
+    def test_counts_success_and_real_misses_per_prefix(self):
+        lines = [
+            "2026-09-15 20:00:00 | SUCCESS | 10.1177/abc | /out/a.pdf",
+            "2026-09-15 20:01:00 | FAILED | 10.4324/x-1 | No PDF found on Sci-Hub or open-access",
+            "2026-09-15 20:02:00 | CORRUPT | 10.4324/x-2 | /out/x-2.pdf | 3.1 KB | Missing %PDF- header",
+        ]
+        assert doi_host.compute_prefix_hit_rates(lines) == {"10.1177": [1, 1], "10.4324": [0, 2]}
+
+    def test_transient_failures_dont_count_against_a_publisher(self):
+        lines = [
+            "2026-09-15 20:00:00 | FAILED | 10.1177/abc | Cloudflare bot-challenge",
+            "2026-09-15 20:01:00 | FAILED | 10.1177/def | ('Connection aborted.', ConnectionResetError(54))",
+        ]
+        assert doi_host.compute_prefix_hit_rates(lines) == {}
+
+    def test_only_each_dois_latest_outcome_counts(self):
+        lines = [
+            "2026-09-15 20:00:00 | FAILED | 10.1515/x | No PDF found on Sci-Hub or open-access",
+            "2026-09-15 20:05:00 | FAILED | 10.1515/x | No PDF found on Sci-Hub or open-access",
+            "2026-09-16 09:00:00 | SUCCESS | 10.1515/X | /out/x.pdf",
+        ]
+        assert doi_host.compute_prefix_hit_rates(lines) == {"10.1515": [1, 1]}
+
+    def test_ignores_malformed_and_non_doi_lines(self):
+        lines = ["", "garbage", "2026-09-15 | SUCCESS | https://example.com/paper | /out/p.pdf"]
+        assert doi_host.compute_prefix_hit_rates(lines) == {}

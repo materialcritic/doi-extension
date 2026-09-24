@@ -50,7 +50,7 @@ Open any academic paper's page (a journal site, a DOI resolver link, PhilPapers,
 1. **Detects the DOI** automatically — from the URL, `citation_doi`/`dc.identifier` meta tags, or page text.
 2. **Checks availability** in the background and badges the toolbar icon: 🟢 green if a real PDF was found, 🔴 red if confirmed unavailable, no badge if inconclusive.
 3. Lets you **download it in one click**, tried in this order:
-   - **Sci-Hub** (races all configured mirrors in parallel, keeps a health/latency history per mirror, returns whichever responds first)
+   - **Sci-Hub** (races all configured mirrors in parallel, keeps a health/latency history per mirror, returns whichever responds first — and once the responsive mirrors have all come back empty, stops waiting on a silent one after a few seconds instead of its full timeout)
    - **Unpaywall** (legitimate open-access copy, if Sci-Hub has nothing)
    - **The publisher's own landing page** (looks for a `citation_pdf_url` meta tag or a direct PDF link, if Unpaywall also has nothing)
 4. If it's still unavailable, offers **fallbacks**: search Google for the title + author, search Google Scholar for the author, or (for SAGE papers specifically) jump straight to SAGE's own PDF viewer in case it's actually open-access.
@@ -275,7 +275,7 @@ Click the toolbar icon on any page with a detected DOI to get:
 
 | Button | What it does |
 |---|---|
-| **Download** | Downloads the PDF (Sci-Hub → Unpaywall → publisher page, in that order) to your configured output folder. Switching tabs (which closes the popup) doesn't cancel it — it keeps running in the background, and reopening the popup on that same paper reconnects to show its progress/result instead of starting a second, duplicate download. |
+| **Download** | Downloads the PDF (Sci-Hub → Unpaywall → publisher page, in that order) to your configured output folder. Switching tabs (which closes the popup) doesn't cancel it — it keeps running in the background, and reopening the popup on that same paper reconnects to show its progress/result instead of starting a second, duplicate download. If a Sci-Hub mirror's file-serving backend hits you with a Cloudflare bot-challenge, a tab opens automatically so you can clear it — you still have to actually clear it yourself (nothing here bypasses that check), but once you do, the download picks up automatically: either the file finishes downloading straight out of that tab (in which case it lands in your browser's normal Downloads folder, not the configured output directory — noted in the result when that happens), or it retries through the usual pipeline using the cookies clearing the challenge left behind. A batch run that hits the same challenge for several papers in a row only opens one tab for it, not one per paper. Reports a clean failure if you close the tab or don't clear it within 2 minutes. |
 | **Copy DOI** | Copies the bare DOI string to your clipboard. |
 | **Copy Sci-Hub Link** | Resolves and copies the mirror URL without downloading anything. |
 | **View on Sci-Hub** | Opens the paper directly on a working Sci-Hub mirror in a new tab (auto-expands the PDF viewer to fill the tab). |
@@ -332,6 +332,8 @@ Reassign any of these from Settings → **Popup Shortcuts** — click "Change" o
 ## The full-page tools
 
 Several buttons open dedicated tabs for bulk operations too heavy for the small popup:
+
+All the batch pages download **3 papers at a time**, not one after another (kept low on purpose — the mirrors rate-limit fast batches). On the author, search, trending, and Scan Page for DOIs pages, the batch also runs **likely hits first**: journal articles, then book chapters, then papers from publishers marked **"Likely unavailable"** — any publisher (DOI prefix) with under a 15% success rate across at least 5 of your past download attempts. Those are still tried, just last; untick them if you'd rather skip them.
 
 ### More by This Author
 
@@ -506,7 +508,7 @@ doi-extension/
 ## Known limitations
 
 - **PhilPapers and Google Scholar can't be scraped** — both are permanently blocked (Cloudflare challenge and no free API, respectively). All author/paper search is Crossref-based instead.
-- **Tandfonline and some other Cloudflare-protected publishers** return a bot-challenge page to any server-side fetch — their PDFs/abstracts can only be reached by a real browser tab, not the native host. The SAGE-specific "View Sage PDF" button works around this on the extension side; other publishers don't currently have an equivalent.
+- **Tandfonline and some other Cloudflare-protected publishers** return a bot-challenge page to any server-side fetch — their PDFs/abstracts can only be reached by a real browser tab, not the native host. The SAGE-specific "View Sage PDF" button works around this on the extension side; other publishers don't currently have an equivalent. The Sci-Hub download path *does* recover from this automatically (see the Download button row above) since it can open a tab itself; this remaining limitation is specifically about the Unpaywall/publisher-page open-access fallback, which doesn't currently trigger that same tab-and-retry flow.
 - **Crossref's author search is relevance-ranked, not a guaranteed-complete filter** — even at the 1,000-result cap, an extremely prolific author's most obscure works could theoretically be missed. There's no "everything by this ORCID" endpoint without a known ORCID iD.
 - Requires **restarting Chrome** (not just reloading the extension) after any change to `doi_host.py` or `scihub_download.py`, since the native host is a separate long-lived process.
 - **Windows support has had several rounds of real hands-on testing** (genuine bugs found and fixed as a result — see the note in [step 2 of installation](#2-install-the-native-messaging-host)), but is still less battle-tested than the macOS path overall.
