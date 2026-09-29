@@ -968,6 +968,7 @@ function downloadFilenameFor(doi, outputDir) {
 }
 
 const DIRECT_DOWNLOAD_TIMEOUT_MS = 20 * 1000;
+const CLOUDFLARE_CHALLENGE_RETRY_MS = 8 * 1000;
 
 // Confirmed live (real user report) that Cloudflare here is challenging
 // scihub_download.py's `requests` session specifically, not Chrome's own
@@ -1094,6 +1095,7 @@ async function handleCloudflareChallenge(pdfUrl, doi, outputDir) {
         settled = true;
         console.log("[CF-challenge] finishing:", { cookieHeader: !!cookieHeader, browserHandledUrl });
         clearInterval(pollTimer);
+        clearInterval(retryTimer);
         clearTimeout(giveUpTimer);
         clearTimeout(ownDownloadTimer);
         chrome.tabs.onRemoved.removeListener(onRemoved);
@@ -1132,6 +1134,28 @@ async function handleCloudflareChallenge(pdfUrl, doi, outputDir) {
         });
       };
       chrome.downloads.onChanged.addListener(onDownloadChanged);
+
+      // The cookie check above only works on origins this extension has host
+      // permission for (just sci.bban.top) -- on any other publisher's
+      // domain chrome.cookies.getAll() fails, so a challenge the user really
+      // did clear was never noticed and the download timed out as "not
+      // cleared" (seen in a real log: ucpress.edu / dukeupress.edu). So
+      // while the tab is open, also just re-try the direct download every
+      // few seconds; it needs no permissions and succeeds the moment the
+      // browser is past the challenge. A failed attempt (challenge page,
+      // not a PDF) is discarded by tryDirectDownload itself.
+      let retryInFlight = false;
+      const retryTimer = setInterval(() => {
+        if (settled || retryInFlight || ownDownloadId !== null) return;
+        retryInFlight = true;
+        tryDirectDownload(pdfUrl, doi, outputDir).then((url) => {
+          retryInFlight = false;
+          if (url) {
+            console.log("[CF-challenge] retry download succeeded after the challenge cleared");
+            finish(url);
+          }
+        });
+      }, CLOUDFLARE_CHALLENGE_RETRY_MS);
 
       const pollTimer = setInterval(() => {
         chrome.cookies.getAll({ url: pdfUrl }, (cookies) => {
@@ -1293,34 +1317,62 @@ function notifyDownloadResult(success, message) {
   });
 }
 
-// Shared with the popup's "Download" button logic — used by the Option+D
-// shortcut so it behaves identically without needing the popup open.
+// DOIs with a downloadDOI() already running -- a repeat request (a
+// double-fired menu click, Enter pressed twice, Alt+D held) is ignored
+// rather than spawning a second identical download.
+const downloadDOIInFlight = new Set();
+
+// Used by the right-click "Grab DOI from selection" item, the Alt+D
+// shortcut, the omnibox, and snowball batches. Shows a notification
+// instead of a popup result. A Cloudflare-challenged download goes through
+// the same browser-side fallback the batch pages use (sendDOI).
 function downloadDOI(doi) {
+  if (downloadDOIInFlight.has(doi)) {
+    logEvent("info", "background", "downloadDOI ignored: already in progress", { doi });
+    return;
+  }
+  downloadDOIInFlight.add(doi);
+  let finished = false;
+  const finish = (ok, message, logLevel, logMessage, logData) => {
+    if (finished) return;
+    finished = true;
+    downloadDOIInFlight.delete(doi);
+    notifyDownloadResult(ok, message);
+    logEvent(logLevel, "background", logMessage, { doi, ...logData });
+    if (ok) markRecentlyDownloaded(doi);
+  };
+
   getSettings().then((settings) => {
     const port = chrome.runtime.connectNative(NATIVE_HOST);
 
     port.onMessage.addListener((message) => {
       if (message.type === "progress") return;
+      port.disconnect();
 
       if (message.status === "ok") {
         const filename = message.filepath ? message.filepath.split("/").pop() : null;
         const sizeInfo = message.size_kb ? ` (${message.size_kb} KB)` : "";
-        notifyDownloadResult(true, filename ? `${filename}${sizeInfo}` : "Done");
-        logEvent("info", "background", "downloadDOI succeeded", { doi, status: message.status, filepath: message.filepath, source: message.source });
-        markRecentlyDownloaded(doi);
+        finish(true, filename ? `${filename}${sizeInfo}` : "Done", "info", "downloadDOI succeeded",
+          { status: message.status, filepath: message.filepath, source: message.source });
+      } else if (message.status === "cloudflare_challenge") {
+        handleCloudflareChallengeShared(message.pdf_url, message.doi || doi, settings.outputDir).then(({ browserHandledUrl }) => {
+          if (browserHandledUrl) {
+            finish(true, "Downloaded via your browser (Cloudflare check) - saved to your browser's Downloads folder", "info",
+              "downloadDOI succeeded via browser", { source: "scihub_browser" });
+          } else {
+            finish(false, "Cloudflare blocked this download and the check wasn't cleared.", "error",
+              "downloadDOI failed", { status: "cloudflare_challenge" });
+          }
+        });
       } else {
-        notifyDownloadResult(false, message.detail || "Unknown error");
-        logEvent("error", "background", "downloadDOI failed", { doi, status: message.status, detail: message.detail });
+        finish(false, message.detail || "Unknown error", "error", "downloadDOI failed",
+          { status: message.status, detail: message.detail });
       }
-      port.disconnect();
     });
 
     port.onDisconnect.addListener(() => {
       const err = chrome.runtime.lastError;
-      if (err) {
-        notifyDownloadResult(false, err.message);
-        logEvent("error", "background", "downloadDOI native host disconnected with error", { doi, error: err.message });
-      }
+      if (err) finish(false, err.message, "error", "downloadDOI native host disconnected with error", { error: err.message });
     });
 
     port.postMessage({ doi, settings });

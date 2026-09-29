@@ -147,6 +147,62 @@ function logLine(line) {
 
 const SVG_NS = "http://www.w3.org/2000/svg";
 let yearFilter = null; // set to a year number to restrict the list to it, or null
+let yearRange = null; // {min, max} from the range slider, or null for all years
+
+const yearMinEl = document.getElementById("year-min");
+const yearMaxEl = document.getElementById("year-max");
+const yearRangeFillEl = document.getElementById("year-range-fill");
+const yearRangeLabelEl = document.getElementById("year-range-label");
+const btnYearRangeReset = document.getElementById("year-range-reset");
+
+// Works with no year are only shown when the full range is selected.
+function inYearRange(work) {
+  if (!yearRange) return true;
+  return work.year != null && work.year >= yearRange.min && work.year <= yearRange.max;
+}
+
+function setupYearRange() {
+  const years = works.map((w) => w.year).filter(Boolean);
+  if (years.length === 0) return;
+  const lo = Math.min(...years);
+  const hi = Math.max(...years);
+  for (const el of [yearMinEl, yearMaxEl]) {
+    el.min = lo;
+    el.max = hi;
+    el.step = 1;
+  }
+  yearMinEl.value = lo;
+  yearMaxEl.value = hi;
+  updateYearRange();
+}
+
+function updateYearRange() {
+  const lo = Number(yearMinEl.min);
+  const hi = Number(yearMinEl.max);
+  let min = Number(yearMinEl.value);
+  let max = Number(yearMaxEl.value);
+  if (min > max) [min, max] = [max, min];
+  yearRange = min === lo && max === hi ? null : { min, max };
+
+  const span = hi - lo || 1;
+  yearRangeFillEl.style.left = ((min - lo) / span) * 100 + "%";
+  yearRangeFillEl.style.width = ((max - min) / span) * 100 + "%";
+
+  const count = works.filter(inYearRange).length;
+  yearRangeLabelEl.textContent = `Years: ${min} – ${max} (${count} work${count === 1 ? "" : "s"})`;
+  btnYearRangeReset.style.display = yearRange ? "inline" : "none";
+
+  applyFilter();
+  updateDownloadButton();
+}
+
+yearMinEl.addEventListener("input", updateYearRange);
+yearMaxEl.addEventListener("input", updateYearRange);
+btnYearRangeReset.addEventListener("click", () => {
+  yearMinEl.value = yearMinEl.min;
+  yearMaxEl.value = yearMaxEl.max;
+  updateYearRange();
+});
 
 // Suspiciously wide year ranges usually mean Crossref's fuzzy author-text
 // search pulled in a different person who happens to share the name.
@@ -396,13 +452,13 @@ function applyFilter() {
     const work = displayWorks[i];
     const title = work ? work.title.toLowerCase() : "";
     const matchesQuery = !query || title.includes(query);
-    const matchesYear = yearFilter == null || (work && work.year === yearFilter);
+    const matchesYear = (yearFilter == null || (work && work.year === yearFilter)) && (!work || inYearRange(work));
     const matches = matchesQuery && matchesYear;
     row.style.display = matches ? "flex" : "none";
     if (matches) visibleCount += 1;
   });
 
-  noMatchesEl.style.display = (query || yearFilter != null) && visibleCount === 0 ? "block" : "none";
+  noMatchesEl.style.display = (query || yearFilter != null || yearRange) && visibleCount === 0 ? "block" : "none";
 }
 
 searchInput.addEventListener("input", applyFilter);
@@ -420,7 +476,9 @@ document.addEventListener("keydown", (e) => {
 });
 
 function getSelectedIndices() {
-  return Array.from(listEl.querySelectorAll("input[type=checkbox]:checked")).map((cb) => Number(cb.dataset.index));
+  return Array.from(listEl.querySelectorAll("input[type=checkbox]:checked"))
+    .map((cb) => Number(cb.dataset.index))
+    .filter((i) => inYearRange(displayWorks[i]));
 }
 
 function updateDownloadButton() {
@@ -672,6 +730,7 @@ async function init() {
   renderAuthorAvatar(searchResp.orcid || "");
   renderYearHistogram();
   renderWorks();
+  setupYearRange();
 }
 
 let affiliation = "";

@@ -282,6 +282,57 @@
       padding-bottom: 6px;
     }
 
+    #year-range { margin: 10px 0 6px; }
+    #year-range-head {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      font-size: 13px;
+      color: var(--text-dim);
+      margin-bottom: 4px;
+    }
+    #year-range-reset {
+      background: none;
+      border: none;
+      padding: 0;
+      color: var(--accent);
+      font-size: 12px;
+      cursor: pointer;
+    }
+    .dual-range { position: relative; height: 22px; }
+    .dual-range-track, .dual-range-fill {
+      position: absolute;
+      top: 9px;
+      height: 4px;
+      border-radius: 2px;
+    }
+    .dual-range-track { left: 0; right: 0; background: var(--border); }
+    .dual-range-fill { background: var(--accent); }
+    .dual-range input[type=range] {
+      position: absolute;
+      left: 0;
+      top: 0;
+      width: 100%;
+      height: 22px;
+      margin: 0;
+      background: transparent;
+      pointer-events: none;
+      -webkit-appearance: none;
+      appearance: none;
+    }
+    .dual-range input[type=range]::-webkit-slider-runnable-track { background: transparent; height: 22px; }
+    .dual-range input[type=range]::-webkit-slider-thumb {
+      -webkit-appearance: none;
+      pointer-events: auto;
+      width: 16px;
+      height: 16px;
+      margin-top: 3px;
+      border-radius: 50%;
+      background: var(--accent);
+      border: 2px solid var(--surface);
+      cursor: pointer;
+    }
+
     #year-histogram-chart {
       display: flex;
       align-items: stretch;
@@ -542,6 +593,18 @@
       </div>
     </div>
     <div id="peak-year-label"></div>
+    <div id="year-range">
+      <div id="year-range-head">
+        <span id="year-range-label"></span>
+        <button id="year-range-reset" type="button" style="display: none;">Show all years</button>
+      </div>
+      <div class="dual-range">
+        <div class="dual-range-track"></div>
+        <div class="dual-range-fill" id="year-range-fill"></div>
+        <input type="range" id="year-min" aria-label="From year">
+        <input type="range" id="year-max" aria-label="To year">
+      </div>
+    </div>
   </div>
 
   <div class="toolbar">
