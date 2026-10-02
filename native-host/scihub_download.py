@@ -504,6 +504,35 @@ class SciHubDownloader:
         save_mirror_health(health)
         return result
 
+    def _url_serves_pdf(self, url, referer=None):
+        """True only if `url` really returns a PDF (content-type says so, or
+        the body starts with %PDF-). Open-access resolvers hand back whatever
+        link a landing page or Unpaywall record claims is the PDF, and a real
+        log showed ~20 of those were actually paywall/landing HTML, which
+        download_pdf() then saved, flagged CORRUPT, and deleted -- reported
+        to the user as "Corrupt" and retried pointlessly instead of falling
+        through to the next source. Checking first lets a miss fall through
+        cleanly. A Cloudflare-challenged URL counts as "serves a PDF" so the
+        existing browser-side fallback still gets its chance."""
+        try:
+            headers = {'Referer': referer} if referer else {}
+            r = self.session.get(url, headers=headers, timeout=20, stream=True, allow_redirects=True)
+            try:
+                if self._is_cloudflare_challenge(r):
+                    return True
+                if r.status_code != 200:
+                    return False
+                ctype = r.headers.get('content-type', '').lower()
+                if 'pdf' in ctype:
+                    return True
+                if 'html' in ctype or 'text' in ctype:
+                    return False
+                return next(r.iter_content(chunk_size=5), b'')[:5] == b'%PDF-'
+            finally:
+                r.close()
+        except requests.RequestException:
+            return False
+
     def get_oa_pdf_url_unpaywall(self, doi):
         """Ask Unpaywall for a legitimate open-access copy of this DOI.
 
@@ -533,9 +562,11 @@ class SciHubDownloader:
             # instead of falling through to the publisher-scrape tier.
             for loc in locations:
                 pdf_url = loc.get('url_for_pdf')
-                if pdf_url:
+                if pdf_url and self._url_serves_pdf(pdf_url):
                     self.log(f"Unpaywall found: {pdf_url}")
                     return pdf_url
+                if pdf_url:
+                    self.log(f"Unpaywall link isn't a PDF, skipping: {pdf_url}")
             return None
         except (requests.RequestException, ValueError) as e:
             self.log(f"Unpaywall lookup failed: {e}")
@@ -559,14 +590,18 @@ class SciHubDownloader:
 
             # Standard scholarly metadata tag — widely supported, including
             # by publishers that don't put the abstract in Crossref.
+            candidates = []
             meta = soup.find('meta', attrs={'name': 'citation_pdf_url'})
             if meta and meta.get('content'):
-                return self._normalize_url(meta['content'], response.url)
-
+                candidates.append(self._normalize_url(meta['content'], response.url))
             link = soup.find('a', href=re.compile(r'\.pdf($|\?)', re.I))
             if link and link.get('href'):
-                return self._normalize_url(link['href'], response.url)
+                candidates.append(self._normalize_url(link['href'], response.url))
 
+            for cand in candidates:
+                if self._url_serves_pdf(cand, referer=response.url):
+                    return cand
+                self.log(f"Publisher link isn't a PDF, skipping: {cand}")
             return None
         except requests.RequestException as e:
             self.log(f"Publisher page fetch failed: {e}")
