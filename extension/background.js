@@ -1213,7 +1213,17 @@ function handleCloudflareChallengeShared(pdfUrl, doi, outputDir) {
   const origin = new URL(pdfUrl).origin;
   const existing = activeCloudflareChallenges.get(origin);
   if (existing) {
-    return existing.then(({ cookieHeader }) => ({ cookieHeader, browserHandledUrl: null }));
+    // A piggybacker can't borrow the owner's result as "done" -- the owner
+    // downloaded a *different* paper -- but once the owner has finished,
+    // Chrome is evidently past the challenge (or it never challenged Chrome
+    // at all), so just download this paper directly too. Without this, with
+    // 3 downloads running at once only the first of each burst succeeded and
+    // the other two were reported as "challenge wasn't cleared" (22 of 24
+    // challenged papers in a real log).
+    return existing.then(async ({ cookieHeader }) => {
+      const directUrl = await tryDirectDownload(pdfUrl, doi, outputDir);
+      return { cookieHeader, browserHandledUrl: directUrl || null };
+    });
   }
   const promise = handleCloudflareChallenge(pdfUrl, doi, outputDir).finally(() => {
     if (activeCloudflareChallenges.get(origin) === promise) {
