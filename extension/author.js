@@ -573,6 +573,7 @@ async function runDownload(indices) {
   let done = 0;
   let failed = 0;
   const batchStart = Date.now();
+  const tally = createBatchTally();
 
   function formatDuration(ms) {
     const totalSeconds = Math.round(ms / 1000);
@@ -622,13 +623,13 @@ async function runDownload(indices) {
         } else if (resp && resp.success && result && result.status === "corrupt") {
           statusEl.textContent = "Corrupt file";
           statusEl.className = "work-status err";
-          failed += 1;
+          failed += 1; tally.record(work, resp);
           failedKeys.add(workKey(work));
           logLine(`CORRUPT | ${work.doi} | ${work.title} | ${result.filepath || ""}`);
         } else {
           statusEl.textContent = "Not found";
           statusEl.className = "work-status err";
-          failed += 1;
+          failed += 1; tally.record(work, resp);
           failedKeys.add(workKey(work));
           const detail = (result && result.detail) || (resp && resp.error) || "unknown error";
           logLine(`FAILED | ${work.doi} | ${work.title} | ${detail}`);
@@ -641,6 +642,7 @@ async function runDownload(indices) {
   });
 
   logLine(`SUMMARY | ${done} downloaded, ${failed} failed, ${indices.length} total${cancelled ? " (cancelled)" : ""}`);
+  renderBatchSummary(statusLineEl, tally, done, authorName);
   statusLineEl.textContent = cancelled
     ? `Cancelled — ${done} downloaded, ${failed} failed. Saved to ${outputDirOverride}`
     : `Done — ${done} downloaded, ${failed} failed. Saved to ${outputDirOverride}`;

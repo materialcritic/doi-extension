@@ -79,3 +79,79 @@ function markIfLikelyUnavailable(statusEl, doi, hitRates) {
   statusEl.className = "work-status likely";
   statusEl.title = "Papers from this publisher have almost never been found before, so this one is tried last.";
 }
+
+// ---- Batch summary -------------------------------------------------------
+const FAILURE_LABELS = {
+  notfound: "not on Sci-Hub",
+  corrupt: "corrupt file",
+  cloudflare: "Cloudflare",
+  blocked: "blocked by publisher",
+  network: "network",
+  other: "other",
+};
+
+function classifyFailure(resp) {
+  const result = resp && resp.result;
+  if (result && result.status === "corrupt") return "corrupt";
+  if (result && result.status === "cloudflare_challenge") return "cloudflare";
+  const detail = String((result && result.detail) || (resp && resp.error) || "");
+  if (/No PDF found/i.test(detail)) return "notfound";
+  if (/cloudflare/i.test(detail)) return "cloudflare";
+  if (/\b(401|403|404|405|451)\b/.test(detail)) return "blocked";
+  if (/connection|timed? ?out|timeout|max retries|disconnected|network|gateway|\b50[0-9]\b|SSL|native host/i.test(detail)) return "network";
+  return "other";
+}
+
+function createBatchTally() {
+  const counts = {};
+  const failures = [];
+  return {
+    counts,
+    failures,
+    record(work, resp) {
+      const key = classifyFailure(resp);
+      counts[key] = (counts[key] || 0) + 1;
+      const result = resp && resp.result;
+      failures.push({
+        doi: work.doi || "",
+        title: work.title || "",
+        reason: FAILURE_LABELS[key],
+        detail: String((result && result.detail) || (resp && resp.error) || "").slice(0, 200),
+      });
+    },
+  };
+}
+
+// Puts a one-line breakdown ("63 downloaded, 41 not on Sci-Hub, 3 Cloudflare")
+// under `afterEl`, plus an export button when anything failed.
+function renderBatchSummary(afterEl, tally, done, fileLabel) {
+  if (!afterEl) return;
+  let box = document.getElementById("batch-summary");
+  if (box) box.remove();
+  box = document.createElement("div");
+  box.id = "batch-summary";
+  box.style.cssText = "margin: 8px 0; font-size: 13px; display: flex; gap: 12px; align-items: center; flex-wrap: wrap;";
+  const parts = [`${done} downloaded`];
+  for (const key of Object.keys(FAILURE_LABELS)) {
+    if (tally.counts[key]) parts.push(`${tally.counts[key]} ${FAILURE_LABELS[key]}`);
+  }
+  const text = document.createElement("span");
+  text.textContent = parts.join(", ");
+  box.appendChild(text);
+
+  if (tally.failures.length > 0) {
+    const btn = document.createElement("button");
+    btn.textContent = `Export ${tally.failures.length} failed as list`;
+    btn.addEventListener("click", () => {
+      const lines = ["DOI\tReason\tTitle\tDetail", ...tally.failures.map((f) => [f.doi, f.reason, f.title, f.detail].map((v) => v.replace(/\s+/g, " ")).join("\t"))];
+      const url = URL.createObjectURL(new Blob([lines.join("\n") + "\n"], { type: "text/tab-separated-values" }));
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `failed-downloads - ${String(fileLabel || "batch").replace(/[^\w\- ]/g, "")}.tsv`;
+      a.click();
+      setTimeout(() => URL.revokeObjectURL(url), 1000);
+    });
+    box.appendChild(btn);
+  }
+  afterEl.insertAdjacentElement("afterend", box);
+}
