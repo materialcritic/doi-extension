@@ -1019,7 +1019,9 @@ function tryDirectDownload(pdfUrl, doi, outputDir) {
               if (isPdf) {
                 console.log("[CF-challenge] direct download succeeded, no tab needed");
                 eraseDownloadHistory(downloadId);
-                resolve(pdfUrlNoFragment);
+                // Resolve with the real saved path (not the URL) so the
+                // download log / "already downloaded" / Reveal get a usable file path.
+                resolve((item && item.filename) || pdfUrlNoFragment);
               } else {
                 console.log("[CF-challenge] direct download completed but wasn't a real PDF (mime:", item && item.mime, ") -- likely a challenge/error page, discarding");
                 chrome.downloads.removeFile(downloadId, () => void chrome.runtime.lastError);
@@ -1118,8 +1120,11 @@ async function handleCloudflareChallenge(pdfUrl, doi, outputDir) {
         if (!delta.state || delta.state.current !== "complete") return;
         if (ownDownloadId !== null && delta.id === ownDownloadId) {
           console.log("[CF-challenge] our own triggered download completed");
-          eraseDownloadHistory(delta.id);
-          finish(pdfUrlNoFragment);
+          chrome.downloads.search({ id: delta.id }, (items) => {
+            const item = items && items[0];
+            eraseDownloadHistory(delta.id);
+            finish((item && item.filename) || pdfUrlNoFragment);
+          });
           return;
         }
         // Fallback: the tab's own navigation downloaded it before (or
@@ -1129,7 +1134,7 @@ async function handleCloudflareChallenge(pdfUrl, doi, outputDir) {
           if (item && (item.url || "").split("#")[0] === pdfUrlNoFragment) {
             console.log("[CF-challenge] tab's own navigation downloaded it");
             eraseDownloadHistory(delta.id);
-            finish(item.url);
+            finish(item.filename || item.url);
           }
         });
       };
