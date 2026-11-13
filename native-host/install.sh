@@ -27,6 +27,19 @@ esac
 # Make the host script executable
 chmod +x "$HOST_SCRIPT"
 
+# The first line of doi_host.py names /usr/bin/python3 on purpose. A
+# `#!/usr/bin/env python3` line makes Chrome launch /usr/bin/env, and macOS then
+# refuses the host access to the PDFs in ~/Downloads (README > Troubleshooting).
+# A machine that keeps python3 somewhere else has to point that line at its own,
+# or Chrome reports "native host has exited".
+if [ ! -x /usr/bin/python3 ]; then
+  echo ""
+  echo "Note: there is no /usr/bin/python3 on this machine, but the first line of"
+  echo "$HOST_SCRIPT says #!/usr/bin/python3."
+  echo "Edit that line to point at your python3 (find it with: command -v python3),"
+  echo "or Chrome will report \"native host has exited\"."
+fi
+
 # Prompt for the Extension ID. Chrome extension IDs are always exactly 32
 # lowercase characters from a-p (they're derived from a SHA-256 hash mapped
 # into that alphabet) -- validating the shape here catches a typo/paste

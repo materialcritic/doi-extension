@@ -84,6 +84,7 @@ function markIfLikelyUnavailable(statusEl, doi, hitRates) {
 const FAILURE_LABELS = {
   notfound: "not on Sci-Hub",
   corrupt: "corrupt file",
+  browser: "Chrome save prompt",
   cloudflare: "Cloudflare",
   blocked: "blocked by publisher",
   network: "network",
@@ -96,6 +97,10 @@ function classifyFailure(resp) {
   if (result && result.status === "cloudflare_challenge") return "cloudflare";
   const detail = String((result && result.detail) || (resp && resp.error) || "");
   if (/No PDF found/i.test(detail)) return "notfound";
+  if (/save each file|Ask where to save/i.test(detail)) return "browser";
+  // The publisher answered with a page instead of the PDF: no access, and
+  // retrying won't change that (unlike a Cloudflare check that may clear).
+  if (/web page instead of|paywall/i.test(detail)) return "blocked";
   if (/cloudflare/i.test(detail)) return "cloudflare";
   if (/\b(401|403|404|405|451)\b/.test(detail)) return "blocked";
   if (/connection|timed? ?out|timeout|max retries|disconnected|network|gateway|\b50[0-9]\b|SSL|native host/i.test(detail)) return "network";
@@ -154,4 +159,55 @@ function renderBatchSummary(afterEl, tally, done, fileLabel) {
     box.appendChild(btn);
   }
   afterEl.insertAdjacentElement("afterend", box);
+}
+
+// ---- Resuming an interrupted run -------------------------------------------
+// What the native host's scan found for a paper (states: ok, present, logged,
+// partial, failed, corrupt; anything else means "no trace") -> how it should appear
+// when the run is resumed. `selected` is whether it's ticked to download.
+// Things that already succeeded are skipped; things that were cut off or
+// failed for a reason that may not repeat are retried; "not found" results
+// are left unticked because they'd almost certainly just fail again (the
+// page offers a toggle to include them).
+function resumePlan(state, detail) {
+  switch (state) {
+    case "ok":
+      return { prior: "done", selected: false, label: "Already downloaded \u2713", cls: "ok", tip: "A complete PDF is already in this issue's folder." };
+    case "logged":
+      return { prior: "done", selected: false, label: "Already downloaded \u2713", cls: "ok", tip: "Logged as downloaded (the file may have been moved out of the folder)." };
+    case "present":
+      return { prior: "done", selected: false, label: "Already downloaded \u2713", cls: "ok", tip: "A file is in the folder, but macOS won't let the helper open it, so it couldn't be checked." };
+    case "partial":
+      return { prior: "redo", selected: true, label: "Incomplete file \u2014 will redo", cls: "warn", tip: "A file is there but it's cut off or isn't a real PDF." };
+    case "corrupt":
+      return { prior: "missing", selected: false, label: "Not available last time", cls: "dim", tip: detail || "The source returned something that wasn't a PDF." };
+    case "failed": {
+      const kind = classifyFailure({ result: { detail } });
+      if (kind === "notfound" || kind === "blocked") {
+        return { prior: "missing", selected: false, label: "Not found last time", cls: "dim", tip: detail || "No source had it." };
+      }
+      return { prior: "retry", selected: true, label: "Failed last time \u2014 will retry", cls: "warn", tip: detail || "" };
+    }
+    default:
+      return null;
+  }
+}
+
+// Splits [{folder, dois}] into groups of at most maxDois so a scan request
+// (and the host's reply) stays small however large the journal is.
+function chunkIssuesForScan(issues, maxDois = 1500) {
+  const chunks = [];
+  let current = [];
+  let count = 0;
+  for (const issue of issues) {
+    if (current.length && count + issue.dois.length > maxDois) {
+      chunks.push(current);
+      current = [];
+      count = 0;
+    }
+    current.push(issue);
+    count += issue.dois.length;
+  }
+  if (current.length) chunks.push(current);
+  return chunks;
 }

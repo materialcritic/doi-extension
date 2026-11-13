@@ -19,6 +19,7 @@
       --accent-text: #201406;
       --ok: #4caf78;
       --err: #e0574a;
+      --warn: #d9a441;
     }
 
     :root[data-theme="parchment"] {
@@ -34,6 +35,7 @@
       --accent-text: #ffffff;
       --ok: #2f8f5d;
       --err: #c0392b;
+      --warn: #a86a1a;
     }
 
     :root[data-theme="slate"] {
@@ -49,6 +51,7 @@
       --accent-text: #ffffff;
       --ok: #2f8f5d;
       --err: #c0392b;
+      --warn: #a86a1a;
     }
 
     :root[data-theme="sage"] {
@@ -64,6 +67,7 @@
       --accent-text: #ffffff;
       --ok: #2f8f5d;
       --err: #c0392b;
+      --warn: #a86a1a;
     }
 
     :root[data-theme="minimal"] {
@@ -79,6 +83,7 @@
       --accent-text: #ffffff;
       --ok: #1a7a4c;
       --err: #b3261e;
+      --warn: #a86a1a;
     }
 
     :root[data-theme="carrot"] {
@@ -94,6 +99,7 @@
       --accent-text: #ffffff;
       --ok: #4a8f3c;
       --err: #c0392b;
+      --warn: #a86a1a;
     }
 
     body {
@@ -190,6 +196,23 @@
       margin-bottom: 2px;
     }
 
+    #retry-missing-wrap {
+      display: none;
+      font-size: 12.5px;
+      color: var(--text-dim);
+      margin: 0 0 8px;
+      cursor: pointer;
+    }
+
+    #retry-missing-wrap input { vertical-align: -2px; margin-right: 6px; }
+
+    #scan-warning {
+      display: none;
+      font-size: 12.5px;
+      color: var(--warn);
+      margin: 0 0 8px;
+    }
+
     #status-text {
       font-size: 12.5px;
       color: var(--text-dim);
@@ -265,6 +288,7 @@
     summary .group-status.ok { color: var(--ok); }
     summary .group-status.err { color: var(--err); }
     summary .group-status.active { color: var(--accent); }
+    summary .group-status.dim { color: var(--text-dim); }
 
     .group-works {
       border-top: 1px solid var(--border);
@@ -315,6 +339,8 @@
     .work-status.ok { color: var(--ok); }
     .work-status.err { color: var(--err); }
     .work-status.active { color: var(--accent); }
+    .work-status.warn { color: var(--warn); }
+    .work-status.dim { color: var(--text-dim); }
     .work-status.removed { color: var(--text-dim); text-decoration: line-through; opacity: 0.6; }
 
     .row-checkbox {
@@ -381,6 +407,8 @@
       <button id="btn-pause" disabled>Pause</button>
       <button id="btn-cancel" disabled>Cancel</button>
     </div>
+    <label id="retry-missing-wrap"><input type="checkbox" id="retry-missing"><span id="retry-missing-label"></span></label>
+    <div id="scan-warning"></div>
     <div id="totals-text"></div>
     <div id="status-text"></div>
     <div id="progress-bar-wrap">

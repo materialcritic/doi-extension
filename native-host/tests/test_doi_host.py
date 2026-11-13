@@ -13,6 +13,7 @@ Run with: cd native-host && python3 -m pytest tests/ -v
 you're running this suite.)
 """
 
+import contextlib
 import json
 import os
 import struct
@@ -21,8 +22,17 @@ import tempfile
 import shutil
 from datetime import datetime, timezone, timedelta
 
+import pytest
+
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import doi_host
+
+
+@pytest.fixture(autouse=True)
+def _isolated_debug_log(tmp_path, monkeypatch):
+    """The host appends to native-host/debug_log.txt, which feeds the logs the
+    extension exports for bug reports -- keep test chatter out of the real one."""
+    monkeypatch.setattr(doi_host, "DEBUG_LOG_PATH", str(tmp_path / "debug_log.txt"))
 
 
 # ---------------------------------------------------------------------------
@@ -270,3 +280,283 @@ class TestComputePrefixHitRates:
     def test_ignores_malformed_and_non_doi_lines(self):
         lines = ["", "garbage", "2026-09-15 | SUCCESS | https://example.com/paper | /out/p.pdf"]
         assert doi_host.compute_prefix_hit_rates(lines) == {}
+
+
+# ---------------------------------------------------------------------------
+# scan_issue_folder / pdf_integrity (resume support for the batch pages)
+# ---------------------------------------------------------------------------
+
+GOOD_PDF = b"%PDF-1.4\n" + b"x" * 3000 + b"\n%%EOF\n"
+CUT_PDF = b"%PDF-1.4\n" + b"x" * 6000          # header but no %%EOF: cut off mid-download
+HTML = b"<!DOCTYPE html><html><body>Access denied</body></html>"
+
+
+class TestPdfIntegrity:
+    def test_complete_truncated_html_empty_and_missing(self, tmp_path):
+        for name, data in (("good.pdf", GOOD_PDF), ("cut.pdf", CUT_PDF), ("page.pdf", HTML), ("empty.pdf", b"")):
+            (tmp_path / name).write_bytes(data)
+        assert doi_host.pdf_integrity(str(tmp_path / "good.pdf")) == "ok"
+        assert doi_host.pdf_integrity(str(tmp_path / "cut.pdf")) == "truncated"
+        assert doi_host.pdf_integrity(str(tmp_path / "page.pdf")) == "notpdf"
+        assert doi_host.pdf_integrity(str(tmp_path / "empty.pdf")) == "notpdf"
+        assert doi_host.pdf_integrity(str(tmp_path / "nope.pdf")) == "missing"
+
+    def test_linearized_pdf_cut_short_is_truncated(self, tmp_path):
+        # A linearized PDF carries an early %%EOF; a cut-off tail must still be caught.
+        (tmp_path / "lin.pdf").write_bytes(b"%PDF-1.5\n" + b"a" * 1000 + b"\n%%EOF\n" + b"b" * 9000)
+        assert doi_host.pdf_integrity(str(tmp_path / "lin.pdf")) == "truncated"
+
+
+class TestDoiFileNames:
+    def test_matches_the_downloaders_naming_rule(self):
+        assert doi_host.doi_file_names("10.1177/019145377800500101") == ["10.1177_019145377800500101.pdf"]
+        assert doi_host.doi_file_names("10.1016/s0002-9149(04)00280-2") == ["10.1016_s0002-9149_04_00280-2.pdf"]
+
+    def test_non_ascii_doi_checks_both_rules(self):
+        names = doi_host.doi_file_names("10.1000/café")
+        assert "10.1000_café.pdf" in names and "10.1000_caf_.pdf" in names
+
+
+class TestScanIssueFolder:
+    def make_base(self, tmp_path):
+        base = tmp_path / "autorename"
+        issue = base / "Journal Vol 5 Issue 1"
+        issue.mkdir(parents=True)
+        return base, issue, {"outputDir": str(base)}
+
+    def scan(self, base, issue, settings, dois):
+        return doi_host.scan_issue_folder(str(issue), dois, settings, {})
+
+    def test_doi_named_complete_file_is_ok(self, tmp_path):
+        base, issue, settings = self.make_base(tmp_path)
+        (issue / "10.1177_a1.pdf").write_bytes(GOOD_PDF)
+        states, _ = self.scan(base, issue, settings, ["10.1177/a1", "10.1177/a2"])
+        assert states == {"10.1177/a1": "ok"}
+
+    def test_file_renamed_by_the_watcher_is_found_through_rename_log(self, tmp_path):
+        base, issue, settings = self.make_base(tmp_path)
+        (issue / "Some Title - Author.pdf").write_bytes(GOOD_PDF)
+        (base / "rename_log.csv").write_text(
+            "timestamp,old_name,new_name\n"
+            '2026-08-07 19:44:32,"Journal Vol 5 Issue 1/10.1177_a1.pdf","Journal Vol 5 Issue 1/Some Title - Author.pdf"\n'
+        )
+        states, _ = self.scan(base, issue, settings, ["10.1177/a1"])
+        assert states == {"10.1177/a1": "ok"}
+
+    def test_every_duplicate_row_and_uniquified_names_resolve(self, tmp_path):
+        base, issue, settings = self.make_base(tmp_path)
+        (issue / "T - A (2).pdf").write_bytes(GOOD_PDF)
+        (base / "rename_log.csv").write_text(
+            "timestamp,old_name,new_name\n"
+            '2026-11-12 01:13:35,"Journal Vol 5 Issue 1/10.1177_a1 (1).pdf","Journal Vol 5 Issue 1/T - A (2).pdf"\n'
+        )
+        assert self.scan(base, issue, settings, ["10.1177/a1"])[0] == {"10.1177/a1": "ok"}
+
+    def test_unrenamed_chrome_uniquified_file_is_found(self, tmp_path):
+        base, issue, settings = self.make_base(tmp_path)
+        (issue / "10.1177_a1 (3).pdf").write_bytes(GOOD_PDF)
+        assert self.scan(base, issue, settings, ["10.1177/a1"])[0] == {"10.1177/a1": "ok"}
+
+    def test_old_format_top_level_rows_resolve_for_top_level_folder(self, tmp_path):
+        base = tmp_path / "autorename"
+        base.mkdir()
+        (base / "Renamed.pdf").write_bytes(GOOD_PDF)
+        (base / "rename_log.csv").write_text("timestamp,old_name,new_name\n03/07/26 7:37,10.1111_x.pdf,Renamed.pdf\n")
+        states, _ = doi_host.scan_issue_folder(str(base), ["10.1111/x"], {"outputDir": str(base)}, {})
+        assert states == {"10.1111/x": "ok"}
+
+    def test_truncated_and_html_files_are_partial_not_downloaded(self, tmp_path):
+        base, issue, settings = self.make_base(tmp_path)
+        (issue / "10.1177_cut.pdf").write_bytes(CUT_PDF)
+        (issue / "10.1177_html.pdf").write_bytes(HTML)
+        states, _ = self.scan(base, issue, settings, ["10.1177/cut", "10.1177/html"])
+        assert states == {"10.1177/cut": "partial", "10.1177/html": "partial"}
+
+    def test_a_good_copy_beats_a_bad_one(self, tmp_path):
+        base, issue, settings = self.make_base(tmp_path)
+        (issue / "10.1177_a1.pdf").write_bytes(CUT_PDF)
+        (issue / "10.1177_a1 (1).pdf").write_bytes(GOOD_PDF)
+        assert self.scan(base, issue, settings, ["10.1177/a1"])[0] == {"10.1177/a1": "ok"}
+
+    def test_log_only_evidence(self, tmp_path):
+        base, issue, settings = self.make_base(tmp_path)
+        (issue / "download_log.txt").write_text(
+            "2026-11-11 19:42:34 | SUCCESS | 10.1/moved | Moved away | /x/10.1_moved.pdf\n"
+            "2026-11-11 19:42:35 | FAILED | 10.1/nf | Not found one | No PDF found on Sci-Hub or open-access\n"
+            "2026-11-11 19:42:36 | CORRUPT | 10.1/bad | Corrupt one | Missing %PDF- header\n"
+            "2026-11-11 19:42:37 | SUMMARY | 3 downloaded\n"
+        )
+        states, details = self.scan(base, issue, settings, ["10.1/moved", "10.1/nf", "10.1/bad", "10.1/never"])
+        assert states == {"10.1/moved": "logged", "10.1/nf": "failed", "10.1/bad": "corrupt"}
+        assert details["10.1/nf"] == "No PDF found on Sci-Hub or open-access"
+
+    def test_last_log_line_wins_and_disk_beats_a_false_failure(self, tmp_path):
+        base, issue, settings = self.make_base(tmp_path)
+        (issue / "download_log.txt").write_text(
+            "2026-11-11 19:00:00 | FAILED | 10.1/a | A | Cloudflare challenge wasn't cleared\n"
+            "2026-11-11 19:05:00 | SUCCESS | 10.1/a | A | /x/10.1_a.pdf\n"
+            "2026-11-11 19:06:00 | FAILED | 10.1/b | B | Cloudflare challenge wasn't cleared\n"
+        )
+        (issue / "10.1_b.pdf").write_bytes(GOOD_PDF)   # saved despite the FAILED line
+        states, _ = self.scan(base, issue, settings, ["10.1/a", "10.1/b"])
+        assert states == {"10.1/a": "logged", "10.1/b": "ok"}
+
+    def test_missing_folder_has_no_evidence(self, tmp_path):
+        base = tmp_path / "autorename"
+        base.mkdir()
+        assert doi_host.scan_issue_folder(str(base / "nope"), ["10.1/x"], {"outputDir": str(base)}, {}) == ({}, {})
+
+    def test_rename_log_outside_the_allowed_roots_is_not_read(self, tmp_path):
+        outside = tmp_path / "elsewhere"
+        issue = outside / "issue"
+        issue.mkdir(parents=True)
+        (outside / "rename_log.csv").write_text('timestamp,old_name,new_name\nt,"issue/10.1_a.pdf","issue/T.pdf"\n')
+        (issue / "T.pdf").write_bytes(GOOD_PDF)
+        assert doi_host.find_rename_log(str(issue), {"outputDir": str(tmp_path / "autorename")}) is None
+
+
+# ---------------------------------------------------------------------------
+# Files the OS lets the host see but not open (macOS privacy gate on ~/Downloads)
+# ---------------------------------------------------------------------------
+
+@contextlib.contextmanager
+def unreadable(*paths):
+    """chmod 000: stat still works, open() raises PermissionError -- the same
+    split macOS's TCC makes for a file this process didn't create."""
+    if os.geteuid() == 0:
+        pytest.skip("root ignores file permissions")
+    for p in paths:
+        os.chmod(p, 0)
+    try:
+        yield
+    finally:
+        for p in paths:
+            os.chmod(p, 0o644)
+
+
+class TestBlockedFiles:
+    def test_unreadable_pdf_is_blocked_not_missing(self, tmp_path):
+        f = tmp_path / "a.pdf"
+        f.write_bytes(GOOD_PDF)
+        with unreadable(f):
+            assert doi_host.pdf_integrity(str(f)) == "blocked"
+
+    def test_unreadable_empty_file_is_still_known_not_to_be_a_pdf(self, tmp_path):
+        f = tmp_path / "empty.pdf"
+        f.write_bytes(b"")
+        with unreadable(f):
+            assert doi_host.pdf_integrity(str(f)) == "notpdf"
+
+    def test_a_stat_that_is_refused_is_never_taken_as_existence(self, tmp_path):
+        if os.geteuid() == 0:
+            pytest.skip("root ignores file permissions")
+        sealed = tmp_path / "sealed"
+        sealed.mkdir()
+        (sealed / "a.pdf").write_bytes(GOOD_PDF)
+        os.chmod(sealed, 0)
+        try:
+            assert doi_host.pdf_integrity(str(sealed / "a.pdf")) == "missing"
+            assert doi_host.pdf_integrity(str(sealed / "nope.pdf")) == "missing"
+        finally:
+            os.chmod(sealed, 0o755)
+
+
+class TestScanWhenBlocked:
+    def make(self, tmp_path):
+        base = tmp_path / "autorename"
+        issue = base / "Journal Vol 5 Issue 1"
+        issue.mkdir(parents=True)
+        return base, issue, {"outputDir": str(base)}
+
+    def test_unreadable_pdf_is_present_and_counted(self, tmp_path):
+        base, issue, settings = self.make(tmp_path)
+        pdf = issue / "10.1177_a1.pdf"
+        pdf.write_bytes(GOOD_PDF)
+        diag = {}
+        with unreadable(pdf):
+            states, _ = doi_host.scan_issue_folder(str(issue), ["10.1177/a1", "10.1177/a2"], settings, {}, diag)
+        assert states == {"10.1177/a1": "present"}
+        assert diag == {"blocked_files": 1}
+
+    def test_unreadable_rename_log_is_reported_and_falls_back_to_the_log(self, tmp_path):
+        base, issue, settings = self.make(tmp_path)
+        (issue / "T - A.pdf").write_bytes(GOOD_PDF)
+        csv_file = base / "rename_log.csv"
+        csv_file.write_text('timestamp,old_name,new_name\nt,"Journal Vol 5 Issue 1/10.1177_a1.pdf","Journal Vol 5 Issue 1/T - A.pdf"\n')
+        (issue / "download_log.txt").write_text("2026-11-11 19:42:34 | SUCCESS | 10.1177/a1 | T | /x/10.1177_a1.pdf\n")
+        diag = {}
+        with unreadable(csv_file):
+            states, _ = doi_host.scan_issue_folder(str(issue), ["10.1177/a1"], settings, {}, diag)
+        # Without the CSV the renamed file can't be located, so only the log vouches for it.
+        assert states == {"10.1177/a1": "logged"}
+        assert diag == {"unreadable_rename_logs": 1}
+
+    def test_unreadable_folder_log_is_reported(self, tmp_path):
+        base, issue, settings = self.make(tmp_path)
+        log = issue / "download_log.txt"
+        log.write_text("2026-11-11 19:42:34 | SUCCESS | 10.1177/a1 | T | x\n")
+        diag = {}
+        with unreadable(log):
+            states, _ = doi_host.scan_issue_folder(str(issue), ["10.1177/a1"], settings, {}, diag)
+        assert states == {}
+        assert diag == {"unreadable_logs": 1}
+
+    def test_a_clean_scan_reports_nothing_blocked(self, tmp_path):
+        base, issue, settings = self.make(tmp_path)
+        (issue / "10.1177_a1.pdf").write_bytes(GOOD_PDF)
+        diag = {}
+        doi_host.scan_issue_folder(str(issue), ["10.1177/a1"], settings, {}, diag)
+        assert diag == {}
+
+    def test_handler_reply_carries_access_and_interpreter(self, tmp_path):
+        base, issue, settings = self.make(tmp_path)
+        pdf = issue / "10.1177_a1.pdf"
+        pdf.write_bytes(GOOD_PDF)
+        (issue / "10.1177_a3.pdf").write_bytes(GOOD_PDF)
+        msg = {"action": "scan_issue_downloads", "settings": settings,
+               "issues": [{"folder": str(issue), "dois": ["10.1177/a1", "10.1177/a3"]}]}
+        with unreadable(pdf):
+            reply = doi_host.handle_scan_issue_downloads(msg)
+        assert reply["status"] == "ok"
+        assert reply["states"] == {"10.1177/a1": "present", "10.1177/a3": "ok"}
+        assert reply["access"]["blocked_files"] == 1
+        assert reply["access"]["unreadable_rename_logs"] == 0
+        assert reply["access"]["python"] == sys.executable
+        assert reply["access"]["python_version"].count(".") == 2
+
+    def test_handler_clean_reply_has_zero_counts(self, tmp_path):
+        base, issue, settings = self.make(tmp_path)
+        (issue / "10.1177_a1.pdf").write_bytes(GOOD_PDF)
+        reply = doi_host.handle_scan_issue_downloads(
+            {"action": "scan_issue_downloads", "settings": settings, "issues": [{"folder": str(issue), "dois": ["10.1177/a1"]}]})
+        assert reply["states"] == {"10.1177/a1": "ok"}
+        assert (reply["access"]["blocked_files"], reply["access"]["unreadable_logs"], reply["access"]["unreadable_rename_logs"]) == (0, 0, 0)
+
+    def test_handler_rejects_bad_input(self):
+        assert doi_host.handle_scan_issue_downloads({"issues": "nope"})["status"] == "error"
+        big = {"issues": [{"folder": "x", "dois": ["10.1/a"] * (doi_host.SCAN_MAX_DOIS + 1)}]}
+        assert doi_host.handle_scan_issue_downloads(big)["status"] == "error"
+
+
+# ---------------------------------------------------------------------------
+# How Chrome launches the host (macOS privacy rules)
+# ---------------------------------------------------------------------------
+class TestHostLaunch:
+    """macOS decides which files the host may open under ~/Downloads by the
+    program Chrome *launched*. With `#!/usr/bin/env python3` that program is
+    /usr/bin/env, which gets EPERM on every PDF and rename log it did not
+    write itself (stat still works), so a real-Chrome resume scan found nothing
+    on disk. Checked with launchd jobs on the author's Mac: the same host and
+    the same Apple Python 3.9.6 read all 159 DOIs' files when line 1 named
+    /usr/bin/python3 and read none of them when it went through env."""
+
+    def test_host_launch_line(self):
+        with open(doi_host.__file__, encoding="utf-8") as f:
+            first = f.readline().strip()
+        assert first.startswith("#!"), "doi_host.py must start with a shebang"
+        interpreter = first[2:].split()[0]
+        assert os.path.basename(interpreter) != "env", (
+            "line 1 goes through /usr/bin/env: on macOS that launches `env`, which "
+            "is refused access to files in ~/Downloads, so the resume scan goes "
+            "blind. Point it straight at an interpreter (see the module docstring).")
+        assert os.path.isabs(interpreter), "use an absolute interpreter path"

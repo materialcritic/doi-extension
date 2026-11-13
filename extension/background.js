@@ -97,16 +97,42 @@ function logEvent(level, source, message, data) {
   }
 }
 
+// Only one read-modify-write of the stored log may be in flight. Each flush
+// reads the whole log, appends its batch and writes the whole log back, so
+// two overlapping flushes (a busy three-lane batch logs constantly) each
+// start from the same snapshot and the later write erases the earlier
+// batch -- a real log was found with lines missing for exactly that reason.
+let logWriteInFlight = false;
+
 function flushLogEntries() {
   logFlushTimer = null;
-  if (!logPendingEntries.length) return;
+  // The write in flight picks up whatever is pending when it finishes.
+  if (logWriteInFlight || !logPendingEntries.length) return;
+  logWriteInFlight = true;
   const batch = logPendingEntries;
   logPendingEntries = [];
-  chrome.storage.local.get({ [LOG_STORAGE_KEY]: [] }, (res) => {
-    const log = res[LOG_STORAGE_KEY].concat(batch);
-    if (log.length > LOG_MAX_ENTRIES) log.splice(0, log.length - LOG_MAX_ENTRIES);
-    chrome.storage.local.set({ [LOG_STORAGE_KEY]: log });
-  });
+  const done = () => {
+    void chrome.runtime.lastError;
+    logWriteInFlight = false;
+    if (logPendingEntries.length && !logFlushTimer) logFlushTimer = setTimeout(flushLogEntries, 0);
+  };
+  try {
+    chrome.storage.local.get({ [LOG_STORAGE_KEY]: [] }, (res) => {
+      try {
+        // A failed read must not be mistaken for an empty log: writing back
+        // just this batch would wipe everything stored. Drop the batch instead.
+        if (chrome.runtime.lastError || !res) return done();
+        const stored = Array.isArray(res[LOG_STORAGE_KEY]) ? res[LOG_STORAGE_KEY] : [];
+        const log = stored.concat(batch);
+        if (log.length > LOG_MAX_ENTRIES) log.splice(0, log.length - LOG_MAX_ENTRIES);
+        chrome.storage.local.set({ [LOG_STORAGE_KEY]: log }, done);
+      } catch (err) {
+        done();
+      }
+    });
+  } catch (err) {
+    done();
+  }
 }
 
 // One-time cleanup of a log stored before redaction/benign-noise-filtering
@@ -913,9 +939,6 @@ function broadcastDownloadResult(doi, payload) {
 // that a download nobody's watching doesn't hang forever.
 const CLOUDFLARE_CHALLENGE_TIMEOUT_MS = 2 * 60 * 1000;
 const CLOUDFLARE_CHALLENGE_POLL_MS = 1000;
-// Once we've kicked off our own download (see below), how long to give it
-// to actually finish before giving up on it specifically.
-const CLOUDFLARE_CHALLENGE_OWN_DOWNLOAD_TIMEOUT_MS = 30 * 1000;
 
 // Same clean-filename rule scihub_download.py's download_pdf() uses, so a
 // file this triggers directly matches what the normal pipeline would have
@@ -926,7 +949,7 @@ function cleanDoiFilename(doi) {
 
 // Removes a completed download's entry from chrome://downloads/history --
 // not the file itself -- so a paper that had to go through Chrome's own
-// download API to get past a Cloudflare block (see tryDirectDownload()
+// download API to get past a Cloudflare block (see browserDownload()
 // below) doesn't linger there the way the normal, native-host-written
 // downloads never do in the first place. Best-effort: a failed erase just
 // leaves one extra history row, not worth surfacing as an error.
@@ -967,276 +990,431 @@ function downloadFilenameFor(doi, outputDir) {
   return subfolder ? `${subfolder}/${plain}` : plain;
 }
 
-const DIRECT_DOWNLOAD_TIMEOUT_MS = 20 * 1000;
+const BROWSER_DL_POLL_MS = 1000;
+const BROWSER_DL_FIRST_LOOK_MS = 250;
+const BROWSER_ADOPT_SETTLE_MS = 300;
+const BROWSER_DL_DIALOG_DETECT_MS = 2000;
+const BROWSER_DL_DIALOG_PATIENCE_MS = 60 * 1000;
+const BROWSER_DL_STALL_MS = 25 * 1000;
+const BROWSER_DL_HARD_CAP_MS = 5 * 60 * 1000;
+const BROWSER_DL_MAX_CONCURRENT = 3;
+const BROWSER_PROMPT_STRIKES_TO_TRIP = 2;
+const BROWSER_PROMPT_TRIP_MS = 10 * 60 * 1000;
 const CLOUDFLARE_CHALLENGE_RETRY_MS = 8 * 1000;
+// A batch runs unattended for an hour or more across several lanes, so its
+// browser fallback may not park a lane for minutes on a page nobody is there
+// to click: a short wait for a challenge that clears itself, then the site is
+// left alone for a while. (One real journal run lost ~46 lane-minutes to 32
+// papers whose publisher link redirected to a paywalled abstract page.)
+const CLOUDFLARE_BATCH_TAB_TIMEOUT_MS = 45 * 1000;
+const CLOUDFLARE_ORIGIN_COOLDOWN_MS = 10 * 60 * 1000;
 
-// Confirmed live (real user report) that Cloudflare here is challenging
-// scihub_download.py's `requests` session specifically, not Chrome's own
-// traffic — a tab opened at the exact same URL loaded the PDF straight
-// through, no challenge shown at all, no cf_clearance cookie ever set.
-// So before popping any visible tab, just try letting Chrome's own
-// network stack fetch the file directly via chrome.downloads.download() —
-// same browser, same cookies/fingerprint Cloudflare already isn't
-// challenging, but with zero UI and no wait. Only counts a real PDF as
-// success (checked via the completed download's mime type): if Cloudflare
-// *does* end up serving this a challenge/error page instead, that would
-// otherwise silently save as a bogus "PDF" full of HTML, so a non-PDF
-// result is discarded and reported as a miss so the caller can still fall
-// back to the interactive tab flow for the genuinely-needs-a-human cases.
-function tryDirectDownload(pdfUrl, doi, outputDir) {
+const SAVE_PROMPT_MESSAGE =
+  "Chrome is asking where to save each file, so the browser download couldn't run unattended. " +
+  "Turn off “Ask where to save each file before downloading” in chrome://settings/downloads, then resume.";
+
+const browserDownloadsInFlight = new Map(); // pdf url -> Promise<result>
+const browserDownloadIds = new Set(); // ids this code started, as opposed to a tab's own download
+const browserPrompt = { seen: false, strikes: 0, trippedUntil: 0, notified: false };
+let browserAbortEpoch = 0;
+let browserSlotsInUse = 0;
+const browserSlotWaiters = [];
+
+function broadcastPhase(doi, phase) {
+  chrome.runtime.sendMessage({ action: "downloadPhase", doi, phase }, () => void chrome.runtime.lastError);
+}
+
+// With Chrome's "Ask where to save each file" on, every chrome.downloads
+// call opens a Save dialog. Once one is seen, run browser downloads one at a
+// time so dialogs don't stack up, and tell the user how to turn it off.
+function onSaveDialogDetected(doi) {
+  browserPrompt.seen = true;
+  broadcastPhase(doi, "save-dialog");
+  if (!browserPrompt.notified) {
+    browserPrompt.notified = true;
+    chrome.notifications.create("doi-save-prompt-" + Date.now(), {
+      type: "basic",
+      iconUrl: "icons/icon128.png",
+      title: "Chrome is asking where to save a file",
+      message: "Turn off “Ask where to save each file before downloading” in chrome://settings/downloads so downloads run unattended.",
+    });
+  }
+}
+
+// An unanswered or cancelled dialog is a strike; two in a row stop further
+// browser downloads for a while (they fail fast with SAVE_PROMPT_MESSAGE)
+// instead of nagging once per paper. Any successful save resets it.
+function registerPromptStrike() {
+  browserPrompt.strikes += 1;
+  if (browserPrompt.strikes >= BROWSER_PROMPT_STRIKES_TO_TRIP) {
+    browserPrompt.trippedUntil = Date.now() + BROWSER_PROMPT_TRIP_MS;
+    logEvent("warn", "background", "browser downloads paused: Chrome keeps asking where to save", {});
+  }
+}
+
+function registerPromptSuccess() {
+  browserPrompt.strikes = 0;
+  browserPrompt.trippedUntil = 0;
+}
+
+function browserSlotLimit() {
+  return browserPrompt.seen ? 1 : BROWSER_DL_MAX_CONCURRENT;
+}
+
+async function acquireBrowserSlot() {
+  while (browserSlotsInUse >= browserSlotLimit()) {
+    await new Promise((resolve) => browserSlotWaiters.push(resolve));
+  }
+  browserSlotsInUse += 1;
+}
+
+function releaseBrowserSlot() {
+  browserSlotsInUse -= 1;
+  const next = browserSlotWaiters.shift();
+  if (next) next();
+}
+
+// Cancels a download and deletes anything it wrote, so a download we've given
+// up on can't finish later as an untracked duplicate.
+function discardBrowserDownload(id) {
+  const ignore = () => void chrome.runtime.lastError;
+  chrome.downloads.cancel(id, () => {
+    ignore();
+    chrome.downloads.removeFile(id, () => {
+      ignore();
+      chrome.downloads.erase({ id }, ignore);
+    });
+  });
+}
+
+function looksLikePdf(item) {
+  const mime = (item.mime || "").toLowerCase();
+  const name = (item.filename || "").toLowerCase();
+  return mime.includes("pdf") || ((mime === "application/octet-stream" || !mime) && name.endsWith(".pdf"));
+}
+
+// Resolves { path } on success or { fail, error? } with fail one of:
+// notpdf, start, interrupted, dialog, stalled, gone, aborted.
+function attemptBrowserDownload(url, doi, outputDir, epoch) {
   return new Promise((resolve) => {
-    const pdfUrlNoFragment = pdfUrl.split("#")[0];
     chrome.downloads.download(
-      { url: pdfUrlNoFragment, filename: downloadFilenameFor(doi, outputDir), conflictAction: "uniquify" },
+      { url, filename: downloadFilenameFor(doi, outputDir), conflictAction: "uniquify" },
       (downloadId) => {
         if (chrome.runtime.lastError || !downloadId) {
-          console.log("[CF-challenge] direct downloads.download() failed to start:", chrome.runtime.lastError && chrome.runtime.lastError.message);
-          resolve(null);
+          resolve({ fail: "start", error: (chrome.runtime.lastError && chrome.runtime.lastError.message) || "" });
           return;
         }
-        const cleanup = () => {
-          clearTimeout(timeoutId);
-          chrome.downloads.onChanged.removeListener(onChanged);
+        browserDownloadIds.add(downloadId);
+        const startedAt = Date.now();
+        let dialogSince = 0;
+        let sawDialog = false;
+        let lastBytes = -1;
+        let lastProgressAt = startedAt;
+        let everGotBytes = false;
+
+        const end = (result, discard) => {
+          browserDownloadIds.delete(downloadId);
+          if (discard) discardBrowserDownload(downloadId);
+          resolve(result);
         };
-        const timeoutId = setTimeout(() => {
-          cleanup();
-          console.log("[CF-challenge] direct download timed out");
-          resolve(null);
-        }, DIRECT_DOWNLOAD_TIMEOUT_MS);
-        const onChanged = (delta) => {
-          if (delta.id !== downloadId || !delta.state) return;
-          if (delta.state.current === "interrupted") {
-            cleanup();
-            console.log("[CF-challenge] direct download was interrupted");
-            resolve(null);
-            return;
+        const fail = (failure) => {
+          if (failure.fail === "dialog" || (failure.fail === "stalled" && !everGotBytes) || failure.error === "USER_CANCELED") {
+            registerPromptStrike();
           }
-          if (delta.state.current === "complete") {
-            cleanup();
-            chrome.downloads.search({ id: downloadId }, (items) => {
-              const item = items && items[0];
-              const isPdf = !!item && (item.mime || "").toLowerCase().includes("pdf");
-              if (isPdf) {
-                console.log("[CF-challenge] direct download succeeded, no tab needed");
-                eraseDownloadHistory(downloadId);
-                // Resolve with the real saved path (not the URL) so the
-                // download log / "already downloaded" / Reveal get a usable file path.
-                resolve((item && item.filename) || pdfUrlNoFragment);
-              } else {
-                console.log("[CF-challenge] direct download completed but wasn't a real PDF (mime:", item && item.mime, ") -- likely a challenge/error page, discarding");
-                chrome.downloads.removeFile(downloadId, () => void chrome.runtime.lastError);
-                resolve(null);
+          end(failure, true);
+        };
+
+        const tick = () => {
+          chrome.downloads.search({ id: downloadId }, (items) => {
+            const item = items && items[0];
+            const now = Date.now();
+            if (epoch !== browserAbortEpoch) return end({ fail: "aborted" }, true);
+            if (!item) return end({ fail: "gone" }, false);
+            if (item.state === "complete") {
+              if (!looksLikePdf(item)) return end({ fail: "notpdf" }, true);
+              if (sawDialog) registerPromptSuccess();
+              eraseDownloadHistory(downloadId);
+              return end({ path: item.filename || url }, false);
+            }
+            if (item.state === "interrupted") return fail({ fail: "interrupted", error: item.error || "" });
+
+            if (!item.filename) {
+              // No target path yet: Chrome is waiting on its Save dialog.
+              if (!dialogSince && now - startedAt >= BROWSER_DL_DIALOG_DETECT_MS) {
+                dialogSince = now;
+                sawDialog = true;
+                onSaveDialogDetected(doi);
               }
-            });
-          }
+              if (dialogSince && now - dialogSince > BROWSER_DL_DIALOG_PATIENCE_MS) return fail({ fail: "dialog" });
+            } else {
+              if (dialogSince) {
+                dialogSince = 0;
+                lastProgressAt = now;
+              }
+              if (item.bytesReceived !== lastBytes) {
+                lastBytes = item.bytesReceived;
+                lastProgressAt = now;
+                if (item.bytesReceived > 0) everGotBytes = true;
+              } else if (now - lastProgressAt > BROWSER_DL_STALL_MS) {
+                return fail({ fail: "stalled" });
+              }
+            }
+            if (now - startedAt > BROWSER_DL_HARD_CAP_MS) return fail({ fail: "stalled" });
+            setTimeout(tick, BROWSER_DL_POLL_MS);
+          });
         };
-        chrome.downloads.onChanged.addListener(onChanged);
+        setTimeout(tick, BROWSER_DL_FIRST_LOOK_MS);
       }
     );
   });
 }
 
-// Opens pdfUrl in a real Chrome tab so the user can clear whatever
-// Cloudflare bot-challenge scihub_download.py just got served instead of
-// the file — a background `requests` call can never solve this itself
-// (needs a real browser executing JS), but Chrome's own navigation can.
-// The one thing this does NOT do, and never will, is try to clear the
-// challenge itself — that's specifically what it exists to require a human
-// for, so the tab stays a real, user-facing tab and nothing here automates
-// past it.
-//
-// Once the challenge clears (detected via the cf_clearance cookie
-// Cloudflare sets on success — polled for rather than tied to a specific
-// navigation event, since the challenge can resolve via an in-page XHR,
-// not just a full page load), this actively triggers the actual download
-// itself via chrome.downloads.download() rather than just hoping the tab's
-// own navigation happens to save the file: the browser now carries a valid
-// clearance cookie, so a fresh request for the same URL succeeds without
-// hitting the challenge again, and — unlike letting the tab's own
-// navigation decide — a chrome.downloads.download() call always produces a
-// real, watchable download rather than sometimes rendering the PDF inline
-// in Chrome's built-in viewer (which fires no download event at all, and
-// was the actual root cause of a real report where the file plainly
-// downloaded but the extension still reported "failed"). Named with the
-// same clean-DOI filename the normal pipeline uses. The tab is closed the
-// moment this download is confirmed complete.
-//
-// Still races the tab's own download as a fallback (in case ours is
-// somehow blocked while the tab's isn't, or the cookie approach doesn't
-// pan out for a given Cloudflare configuration) — whichever finishes first
-// wins.
-//
-// Resolves { cookieHeader, browserHandledUrl } — cookieHeader is a
-// "name=value; ..." header built from every cookie now on that origin (not
-// just cf_clearance alone, since some Cloudflare setups also gate on
-// companions like __cf_bm) or null; browserHandledUrl is the exact URL
-// that ended up downloaded (ours or the tab's own), or null. Both null
-// means the user closed the tab, or 2 minutes passed, without clearing it.
-async function handleCloudflareChallenge(pdfUrl, doi, outputDir) {
-  const directUrl = await tryDirectDownload(pdfUrl, doi, outputDir);
-  if (directUrl) {
-    return { cookieHeader: null, browserHandledUrl: directUrl };
+async function runBrowserDownload(url, doi, outputDir) {
+  const epoch = browserAbortEpoch;
+  if (Date.now() < browserPrompt.trippedUntil) return { fail: "blocked" };
+  await acquireBrowserSlot();
+  try {
+    if (epoch !== browserAbortEpoch) return { fail: "aborted" };
+    if (Date.now() < browserPrompt.trippedUntil) return { fail: "blocked" };
+    return await attemptBrowserDownload(url, doi, outputDir, epoch);
+  } finally {
+    releaseBrowserSlot();
   }
+}
 
-  console.log("[CF-challenge] direct download didn't pan out, opening a tab for", pdfUrl);
+// Chrome's own network stack isn't challenged by Cloudflare the way the
+// Python downloader is, so a challenged paper is simply fetched through
+// chrome.downloads. One in-flight download per URL: concurrent callers (the
+// tab flow's retries, a double-sent request) share it instead of each saving
+// their own copy.
+function browserDownload(pdfUrl, doi, outputDir) {
+  const url = pdfUrl.split("#")[0];
+  const existing = browserDownloadsInFlight.get(url);
+  if (existing) return existing;
+  const promise = runBrowserDownload(url, doi, outputDir).finally(() => browserDownloadsInFlight.delete(url));
+  browserDownloadsInFlight.set(url, promise);
+  return promise;
+}
+
+// Only a failure that looks like Cloudflare's challenge is worth opening a
+// tab for; a save-dialog timeout, a stall, or a network error is not.
+function isChallengeLike(failure) {
+  if (!failure) return false;
+  if (failure.fail === "notpdf" || failure.fail === "start") return true;
+  return failure.fail === "interrupted" && /^SERVER_(FORBIDDEN|UNAUTHORIZED|FAILED|BAD_CONTENT)$/.test(failure.error || "");
+}
+
+function abortBrowserDownloads() {
+  browserAbortEpoch += 1;
+}
+
+function resetBrowserFallback() {
+  browserPrompt.strikes = 0;
+  browserPrompt.trippedUntil = 0;
+}
+
+// Waits for a download some other code (the challenge tab's own navigation)
+// started, so we adopt it rather than start a second copy.
+function watchAdoptedDownload(id) {
   return new Promise((resolve) => {
-    chrome.tabs.create({ url: pdfUrl, active: true }, (tab) => {
+    const deadline = Date.now() + CLOUDFLARE_CHALLENGE_TIMEOUT_MS;
+    const tick = () => {
+      chrome.downloads.search({ id }, (items) => {
+        const item = items && items[0];
+        if (!item || item.state === "interrupted" || Date.now() > deadline) return resolve(null);
+        if (item.state === "complete") {
+          if (!looksLikePdf(item)) return resolve(null);
+          eraseDownloadHistory(id);
+          return resolve(item.filename || null);
+        }
+        setTimeout(tick, BROWSER_DL_POLL_MS);
+      });
+    };
+    tick();
+  });
+}
+
+// Opens the PDF in a real tab for the (rare) challenge that needs a person,
+// and keeps trying a browser download until it gets through. This never
+// attempts to solve the challenge itself.
+// Resolves { path, cookieHeader, failure }. A batch's tab opens in the
+// background and gives up sooner (see CLOUDFLARE_BATCH_TAB_TIMEOUT_MS): a
+// challenge that solves itself needs only a few seconds, and one that needs a
+// person is not going to be answered mid-batch.
+function openChallengeTab(pdfUrl, doi, outputDir, opts = {}) {
+  const batch = !!opts.batch;
+  const timeoutMs = batch ? CLOUDFLARE_BATCH_TAB_TIMEOUT_MS : CLOUDFLARE_CHALLENGE_TIMEOUT_MS;
+  return new Promise((resolve) => {
+    chrome.tabs.create({ url: pdfUrl, active: !batch }, (tab) => {
       if (chrome.runtime.lastError || !tab) {
-        console.log("[CF-challenge] tabs.create failed:", chrome.runtime.lastError && chrome.runtime.lastError.message);
-        resolve({ cookieHeader: null, browserHandledUrl: null });
+        resolve({ path: null, cookieHeader: null, failure: { fail: "tab" } });
         return;
       }
       const tabId = tab.id;
-      const pdfUrlNoFragment = pdfUrl.split("#")[0];
+      const urlNoFragment = pdfUrl.split("#")[0];
       let settled = false;
       let cookieHeader = null;
-      let ownDownloadId = null;
+      let adoptedId = null;
+      let pollTimer = null;
+      let retryTimer = null;
+      let giveUpTimer = null;
 
-      const finish = (browserHandledUrl) => {
+      const finish = (path, failure) => {
         if (settled) return;
         settled = true;
-        console.log("[CF-challenge] finishing:", { cookieHeader: !!cookieHeader, browserHandledUrl });
         clearInterval(pollTimer);
         clearInterval(retryTimer);
         clearTimeout(giveUpTimer);
-        clearTimeout(ownDownloadTimer);
         chrome.tabs.onRemoved.removeListener(onRemoved);
-        chrome.downloads.onChanged.removeListener(onDownloadChanged);
+        chrome.downloads.onCreated.removeListener(onCreated);
         chrome.tabs.remove(tabId, () => void chrome.runtime.lastError);
-        resolve({ cookieHeader, browserHandledUrl: browserHandledUrl || null });
+        resolve({ path: path || null, cookieHeader, failure: path ? null : failure || null });
       };
 
       const onRemoved = (closedTabId) => {
-        if (closedTabId === tabId) {
-          console.log("[CF-challenge] tab closed by user before it resolved");
-          finish(null);
-        }
+        if (closedTabId === tabId) finish(null);
       };
       chrome.tabs.onRemoved.addListener(onRemoved);
 
-      let ownDownloadTimer = null;
-
-      const onDownloadChanged = (delta) => {
-        if (!delta.state || delta.state.current !== "complete") return;
-        if (ownDownloadId !== null && delta.id === ownDownloadId) {
-          console.log("[CF-challenge] our own triggered download completed");
-          chrome.downloads.search({ id: delta.id }, (items) => {
-            const item = items && items[0];
-            eraseDownloadHistory(delta.id);
-            finish((item && item.filename) || pdfUrlNoFragment);
+      const onCreated = (item) => {
+        // Wait a beat so our own downloads (whose ids arrive via callback)
+        // can register before we judge whose this is.
+        setTimeout(() => {
+          if (settled || adoptedId !== null || browserDownloadIds.has(item.id)) return;
+          if ((item.url || "").split("#")[0] !== urlNoFragment) return;
+          adoptedId = item.id;
+          watchAdoptedDownload(item.id).then((path) => {
+            if (path) finish(path);
+            else adoptedId = null;
           });
-          return;
-        }
-        // Fallback: the tab's own navigation downloaded it before (or
-        // instead of) our explicit chrome.downloads.download() call below.
-        chrome.downloads.search({ id: delta.id }, (items) => {
-          const item = items && items[0];
-          if (item && (item.url || "").split("#")[0] === pdfUrlNoFragment) {
-            console.log("[CF-challenge] tab's own navigation downloaded it");
-            eraseDownloadHistory(delta.id);
-            finish(item.filename || item.url);
-          }
+        }, BROWSER_ADOPT_SETTLE_MS);
+      };
+      chrome.downloads.onCreated.addListener(onCreated);
+
+      const attempt = () => {
+        if (settled || adoptedId !== null) return;
+        browserDownload(pdfUrl, doi, outputDir).then((r) => {
+          if (settled) return;
+          if (r.path) finish(r.path);
+          else if (r.fail === "dialog" || r.fail === "blocked" || r.fail === "aborted") finish(null, r);
         });
       };
-      chrome.downloads.onChanged.addListener(onDownloadChanged);
+      retryTimer = setInterval(attempt, CLOUDFLARE_CHALLENGE_RETRY_MS);
 
-      // The cookie check above only works on origins this extension has host
-      // permission for (just sci.bban.top) -- on any other publisher's
-      // domain chrome.cookies.getAll() fails, so a challenge the user really
-      // did clear was never noticed and the download timed out as "not
-      // cleared" (seen in a real log: ucpress.edu / dukeupress.edu). So
-      // while the tab is open, also just re-try the direct download every
-      // few seconds; it needs no permissions and succeeds the moment the
-      // browser is past the challenge. A failed attempt (challenge page,
-      // not a PDF) is discarded by tryDirectDownload itself.
-      let retryInFlight = false;
-      const retryTimer = setInterval(() => {
-        if (settled || retryInFlight || ownDownloadId !== null) return;
-        retryInFlight = true;
-        tryDirectDownload(pdfUrl, doi, outputDir).then((url) => {
-          retryInFlight = false;
-          if (url) {
-            console.log("[CF-challenge] retry download succeeded after the challenge cleared");
-            finish(url);
-          }
-        });
-      }, CLOUDFLARE_CHALLENGE_RETRY_MS);
-
-      const pollTimer = setInterval(() => {
+      // chrome.cookies only works for origins we hold host permission for
+      // (sci.bban.top); the retry timer covers the rest.
+      pollTimer = setInterval(() => {
         chrome.cookies.getAll({ url: pdfUrl }, (cookies) => {
-          if (chrome.runtime.lastError) {
-            console.log("[CF-challenge] cookies.getAll error (likely missing host permission for this domain):", chrome.runtime.lastError.message, pdfUrl);
-            return;
-          }
-          if (!cookies || cookieHeader) return;
-          if (cookies.length) console.log("[CF-challenge] cookies seen so far:", cookies.map((c) => c.name));
+          if (chrome.runtime.lastError || !cookies || cookieHeader) return;
           if (cookies.some((c) => c.name === "cf_clearance")) {
             cookieHeader = cookies.map((c) => `${c.name}=${c.value}`).join("; ");
-            console.log("[CF-challenge] cf_clearance cookie found, triggering download");
-            clearInterval(pollTimer);
-            clearTimeout(giveUpTimer);
-            chrome.downloads.download(
-              { url: pdfUrlNoFragment, filename: downloadFilenameFor(doi, outputDir), conflictAction: "uniquify" },
-              (downloadId) => {
-                if (chrome.runtime.lastError || !downloadId) {
-                  console.log("[CF-challenge] downloads.download failed to start:", chrome.runtime.lastError && chrome.runtime.lastError.message);
-                  // Couldn't kick off our own download (e.g. the cookie
-                  // wasn't actually enough after all) -- fall back to
-                  // whatever the tab's own navigation manages, within the
-                  // same short window.
-                  ownDownloadTimer = setTimeout(() => finish(null), CLOUDFLARE_CHALLENGE_OWN_DOWNLOAD_TIMEOUT_MS);
-                  return;
-                }
-                console.log("[CF-challenge] downloads.download started, id:", downloadId);
-                ownDownloadId = downloadId;
-                ownDownloadTimer = setTimeout(() => finish(null), CLOUDFLARE_CHALLENGE_OWN_DOWNLOAD_TIMEOUT_MS);
-              }
-            );
+            attempt();
           }
         });
       }, CLOUDFLARE_CHALLENGE_POLL_MS);
 
-      const giveUpTimer = setTimeout(() => {
-        console.log("[CF-challenge] gave up after timeout with no cookie found");
-        finish(null);
-      }, CLOUDFLARE_CHALLENGE_TIMEOUT_MS);
+      giveUpTimer = setTimeout(() => finish(null), timeoutMs);
     });
   });
 }
 
-// Coalesces concurrent challenges on the same origin behind a single tab —
-// a batch "Download All Works" run can queue several papers that all hit
-// the same Cloudflare-gated backend back to back, and popping one tab per
-// paper for the exact same challenge is the opposite of "ease the
-// process." Only the first caller for a given origin actually opens/solves
-// it; everyone else piggybacks on that same outcome. A piggybacker never
-// gets credit for the tab's own download (that was a different paper's
-// file), only the cookie half of the result.
-const activeCloudflareChallenges = new Map(); // origin -> Promise<{cookieHeader, browserHandledUrl}>
+const activeChallengeTabs = new Map(); // origin -> Promise
+const originChallengeCooldown = new Map(); // origin -> epoch ms before which a batch won't open another tab
 
-function handleCloudflareChallengeShared(pdfUrl, doi, outputDir) {
-  const origin = new URL(pdfUrl).origin;
-  const existing = activeCloudflareChallenges.get(origin);
-  if (existing) {
-    // A piggybacker can't borrow the owner's result as "done" -- the owner
-    // downloaded a *different* paper -- but once the owner has finished,
-    // Chrome is evidently past the challenge (or it never challenged Chrome
-    // at all), so just download this paper directly too. Without this, with
-    // 3 downloads running at once only the first of each burst succeeded and
-    // the other two were reported as "challenge wasn't cleared" (22 of 24
-    // challenged papers in a real log).
-    return existing.then(async ({ cookieHeader }) => {
-      const directUrl = await tryDirectDownload(pdfUrl, doi, outputDir);
-      return { cookieHeader, browserHandledUrl: directUrl || null };
+function originOf(url) {
+  try {
+    return new URL(url).origin;
+  } catch (_) {
+    return "";
+  }
+}
+
+function inCooldown(origin) {
+  return Date.now() < (originChallengeCooldown.get(origin) || 0);
+}
+
+// Resolves { cookieHeader, browserHandledUrl, failure }. Only a challenge a
+// person has to clear gets a tab, and only one tab per origin.
+//
+// `opts.batch` (set for the batch pages' downloads) changes two things:
+//  - A web page in place of the PDF is final. It is what a publisher serves
+//    when it won't hand the paper over (paywall, login, a redirect to the
+//    abstract); no tab can change that, and waiting for one cost minutes per
+//    paper. A real Cloudflare challenge is an HTTP error (403/503), which
+//    Chrome reports as an interrupted download and is handled below.
+//  - A site whose challenge didn't clear is left alone for
+//    CLOUDFLARE_ORIGIN_COOLDOWN_MS, so one stuck site costs one short wait
+//    rather than one per paper.
+async function handleCloudflareChallengeShared(pdfUrl, doi, outputDir, opts = {}) {
+  const batch = !!opts.batch;
+  const origin = originOf(pdfUrl);
+  const none = (failure) => ({ cookieHeader: null, browserHandledUrl: null, failure });
+
+  const first = await browserDownload(pdfUrl, doi, outputDir);
+  if (first.path) {
+    originChallengeCooldown.delete(origin);
+    return { cookieHeader: null, browserHandledUrl: first.path, failure: null };
+  }
+  // Say why, so the next log shows whether a slow paper was a paywall page, a
+  // real challenge or something else. (A cancel or a Save-dialog stop carries
+  // no news and would only crowd the 2,000-line log.)
+  if (first.fail !== "aborted" && first.fail !== "blocked") {
+    logEvent("warn", "background", "browser download didn't produce a PDF", {
+      doi, fail: first.fail, error: first.error || "", host: origin.replace(/^https?:\/\//, ""), batch,
     });
   }
-  const promise = handleCloudflareChallenge(pdfUrl, doi, outputDir).finally(() => {
-    if (activeCloudflareChallenges.get(origin) === promise) {
-      activeCloudflareChallenges.delete(origin);
-    }
-  });
-  activeCloudflareChallenges.set(origin, promise);
-  return promise;
+  if (batch && first.fail === "notpdf") return none({ fail: "webpage" });
+  if (!isChallengeLike(first)) return none(first);
+  if (batch && inCooldown(origin)) return none({ fail: "cooldown", origin });
+
+  broadcastPhase(doi, batch ? "tab-background" : "tab");
+  const existing = activeChallengeTabs.get(origin);
+  if (existing) {
+    await existing;
+    if (batch && inCooldown(origin)) return none({ fail: "cooldown", origin });
+    const again = await browserDownload(pdfUrl, doi, outputDir);
+    return { cookieHeader: null, browserHandledUrl: again.path || null, failure: again.path ? null : again };
+  }
+  // The cooldown is decided inside the shared promise so that anyone waiting
+  // on it sees it the moment they resume.
+  const promise = openChallengeTab(pdfUrl, doi, outputDir, { batch })
+    .then((result) => {
+      if (result.path) originChallengeCooldown.delete(origin);
+      else if (batch && !(result.failure && result.failure.fail === "aborted")) {
+        originChallengeCooldown.set(origin, Date.now() + CLOUDFLARE_ORIGIN_COOLDOWN_MS);
+      }
+      return result;
+    })
+    .finally(() => {
+      if (activeChallengeTabs.get(origin) === promise) activeChallengeTabs.delete(origin);
+    });
+  activeChallengeTabs.set(origin, promise);
+  const result = await promise;
+  return { cookieHeader: result.cookieHeader, browserHandledUrl: result.path, failure: result.failure };
+}
+
+// Detail text for a paper saved through the browser; only mentions the
+// Downloads folder when it really landed outside the configured output dir.
+function browserSuccessDetail(path, outputDir) {
+  const norm = (p) => String(p || "").replace(/\\/g, "/").toLowerCase();
+  const dir = norm(outputDir).replace(/\/+$/, "");
+  if (dir && norm(path).startsWith(dir + "/")) return "Downloaded via your browser (Cloudflare check)";
+  return `Downloaded via your browser (Cloudflare check) — saved to your browser's Downloads folder, not the configured output directory: ${path}`;
+}
+
+// Error text for a browser fallback that produced no file.
+function browserFailureDetail(failure, cookieHeader) {
+  if (failure && (failure.fail === "dialog" || failure.fail === "blocked")) return SAVE_PROMPT_MESSAGE;
+  if (failure && failure.fail === "aborted") return "Download cancelled.";
+  if (failure && failure.fail === "webpage") {
+    return "The publisher's site returned a web page instead of the PDF \u2014 likely paywalled, so there's no access to this paper.";
+  }
+  if (failure && failure.fail === "cooldown") {
+    const host = String(failure.origin || "").replace(/^https?:\/\//, "") || "this site";
+    return `Cloudflare is blocking ${host} and the check wasn't cleared a few minutes ago \u2014 open ${host} in a tab, clear the check, then resume.`;
+  }
+  if (!cookieHeader) return "Cloudflare challenge wasn't cleared — download cancelled.";
+  return null;
 }
 
 function runNextCheck() {
@@ -1370,14 +1548,16 @@ function downloadDOI(doi) {
         finish(true, filename ? `${filename}${sizeInfo}` : "Done", "info", "downloadDOI succeeded",
           { status: message.status, filepath: message.filepath, source: message.source });
       } else if (message.status === "cloudflare_challenge") {
-        handleCloudflareChallengeShared(message.pdf_url, message.doi || doi, settings.outputDir).then(({ browserHandledUrl }) => {
+        handleCloudflareChallengeShared(message.pdf_url, message.doi || doi, settings.outputDir).then(({ cookieHeader, browserHandledUrl, failure }) => {
           if (browserHandledUrl) {
-            finish(true, "Downloaded via your browser (Cloudflare check) - saved to your browser's Downloads folder", "info",
-              "downloadDOI succeeded via browser", { source: "scihub_browser" });
+            finish(true, browserSuccessDetail(browserHandledUrl, settings.outputDir), "info",
+              "downloadDOI succeeded via browser", { source: "scihub_browser", filepath: browserHandledUrl });
           } else {
-            finish(false, "Cloudflare blocked this download and the check wasn't cleared.", "error",
-              "downloadDOI failed", { status: "cloudflare_challenge" });
+            const detail = browserFailureDetail(failure, cookieHeader) || "Cloudflare blocked this download and the check wasn't cleared.";
+            finish(false, detail, "error", "downloadDOI failed", { status: "cloudflare_challenge", detail });
           }
+        }).catch((err) => {
+          finish(false, "Browser download failed: " + String((err && err.message) || err), "error", "downloadDOI browser fallback threw", {});
         });
       } else {
         finish(false, message.detail || "Unknown error", "error", "downloadDOI failed",
@@ -2631,6 +2811,45 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     return true;
   }
 
+  if (request.action === "scanIssueDownloads") {
+    getSettings().then((settings) => {
+      const port = chrome.runtime.connectNative(NATIVE_HOST);
+
+      port.onMessage.addListener((message) => {
+        if (message.type === "progress") return;
+        sendResponse({
+          success: message.status === "ok",
+          states: message.states || {},
+          details: message.details || {},
+          // What the OS refused to let the host read (see handle_scan_issue_downloads).
+          access: message.access || null,
+          error: message.detail,
+        });
+        port.disconnect();
+      });
+
+      port.onDisconnect.addListener(() => {
+        const err = chrome.runtime.lastError;
+        if (err) sendResponse({ success: false, states: {}, details: {}, access: null, error: err.message });
+      });
+
+      port.postMessage({ action: "scan_issue_downloads", issues: request.issues, settings });
+    });
+    return true;
+  }
+
+  if (request.action === "cancelBrowserDownloads") {
+    abortBrowserDownloads();
+    sendResponse({ success: true });
+    return false;
+  }
+
+  if (request.action === "resetBrowserFallback") {
+    resetBrowserFallback();
+    sendResponse({ success: true });
+    return false;
+  }
+
   if (request.action === "getPrefixHitRates") {
     const port = chrome.runtime.connectNative(NATIVE_HOST);
 
@@ -2905,7 +3124,12 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
   if (request.action === "sendDOI") {
     markDownloadActive(request.doi);
 
+    // Answer the page exactly once; a late second report (a throw after the
+    // result was already sent) must not be able to reach it.
+    let finalized = false;
     const finalizeDownload = (message) => {
+      if (finalized) return;
+      finalized = true;
       sendResponse({ success: true, result: message });
       clearDownloadActive(request.doi);
       broadcastDownloadResult(request.doi, { success: true, result: message });
@@ -2916,6 +3140,8 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     };
 
     const finalizeDisconnect = (errMessage) => {
+      if (finalized) return;
+      finalized = true;
       console.error("Native messaging error:", errMessage);
       sendResponse({ success: false, error: errMessage });
       clearDownloadActive(request.doi);
@@ -2943,31 +3169,29 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
 
         if (message.status === "cloudflare_challenge" && !isCloudflareRetry) {
           port.disconnect();
-          logEvent("warn", "background", "sendDOI hit a Cloudflare challenge, opening a tab for the user to clear it", { doi: request.doi, pdfUrl: message.pdf_url });
-          chrome.runtime.sendMessage({ action: "progress", line: "Cloudflare is challenging this download — opening a tab, please clear it there..." }, () => void chrome.runtime.lastError);
-          handleCloudflareChallengeShared(message.pdf_url, message.doi || request.doi, effectiveSettings.outputDir).then(({ cookieHeader, browserHandledUrl }) => {
+          logEvent("warn", "background", "sendDOI hit a Cloudflare challenge, fetching through the browser", { doi: request.doi, pdfUrl: message.pdf_url });
+          broadcastPhase(request.doi, "browser");
+          chrome.runtime.sendMessage({ action: "progress", line: "Cloudflare is challenging this download \u2014 fetching it through your browser instead..." }, () => void chrome.runtime.lastError);
+          handleCloudflareChallengeShared(message.pdf_url, message.doi || request.doi, effectiveSettings.outputDir, { batch: !!request.outputDirOverride }).then(({ cookieHeader, browserHandledUrl, failure }) => {
             if (browserHandledUrl) {
-              // Chrome downloaded the actual file straight out of the
-              // challenge tab -- that's the paper, done, regardless of
-              // whether a cookie also came back. It lands wherever the
-              // browser's own download went (its normal Downloads
-              // folder), not this extension's configured output
-              // directory, so say so plainly rather than implying it's
-              // in the usual place.
               finalizeDownload({
                 status: "ok",
-                detail: `Downloaded via browser tab (Cloudflare challenge) — saved to your browser's Downloads folder, not the configured output directory: ${browserHandledUrl}`,
+                detail: browserSuccessDetail(browserHandledUrl, effectiveSettings.outputDir),
                 filepath: browserHandledUrl,
                 source: "scihub_browser",
               });
               return;
             }
-            if (!cookieHeader) {
-              finalizeDownload({ status: "error", detail: "Cloudflare challenge wasn't cleared — download cancelled." });
+            const failureDetail = browserFailureDetail(failure, cookieHeader);
+            if (failureDetail) {
+              finalizeDownload({ status: "error", detail: failureDetail });
               return;
             }
             chrome.runtime.sendMessage({ action: "progress", line: "Challenge cleared, retrying the download..." }, () => void chrome.runtime.lastError);
             runDownloadAttempt(effectiveSettings, { pdfUrl: message.pdf_url, cfCookie: cookieHeader }, true);
+          }).catch((err) => {
+            logEvent("error", "background", "browser fallback threw", { doi: request.doi, error: String((err && err.message) || err) });
+            finalizeDownload({ status: "error", detail: "Browser download failed: " + String((err && err.message) || err) });
           });
           return;
         }

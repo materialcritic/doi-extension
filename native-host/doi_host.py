@@ -1,13 +1,22 @@
-#!/usr/bin/env python3
+#!/usr/bin/python3
 """
 Native Messaging Host for DOI Grabber Chrome extension.
 Receives a DOI from the extension, runs it through your existing Python
 script, and streams progress + a final result back to the extension.
+
+Why line 1 names /usr/bin/python3 instead of `/usr/bin/env python3`: on macOS,
+which files this process may open under ~/Downloads is decided by the program
+Chrome *launched*, not by the Python that ends up running. Launched through
+`env`, the host could stat the PDFs and the rename log that other programs had
+written there but was refused when it tried to open them, so the resume scan
+saw nothing on disk. Launched straight as /usr/bin/python3 it is not refused.
+Keep line 1 pointing directly at an interpreter (see test_host_launch_line).
 """
 
 import csv
 import os
 import platform
+import re
 import shutil
 import sys
 import json
@@ -681,6 +690,255 @@ def compute_prefix_hit_rates(lines):
     return rates
 
 
+PDF_TAIL_BYTES = 2048
+# " (1)" .. " (8)": the duplicate-name suffix Chrome (and the rename watcher)
+# adds when the same file is saved more than once.
+MAX_UNIQ_VARIANTS = 8
+SCAN_MAX_DOIS = 2000
+_UNIQ_SUFFIX = re.compile(r" \(\d+\)(?=\.pdf$)", re.IGNORECASE)
+
+
+def pdf_integrity(path):
+    """Classify a file on disk: 'ok' (a PDF whose %%EOF marker is present,
+    i.e. the download actually finished), 'truncated' (starts like a PDF but
+    has no %%EOF near the end -- cut off mid-download), 'notpdf' (an HTML
+    error page or other junk saved as .pdf), 'blocked' (the file is there but
+    this process isn't allowed to read it), or 'missing'. Reads only the
+    first 5 and last 2 KB, so it's cheap enough to run on thousands of files.
+    Checked against 1,850 real PDFs: 16 were HTML pages, 2 were empty files,
+    2 were genuinely truncated downloads, and no complete PDF was
+    misclassified.
+
+    'blocked' is kept apart from 'missing' on purpose. On macOS the native
+    host runs as its own process (Chrome doesn't lend it its access), and
+    the privacy gate on ~/Downloads (TCC) lets it stat a file written by
+    someone else -- the browser, the rename watcher -- but not open it. Calling
+    that "missing" made a resume scan report an empty folder."""
+    try:
+        size = os.path.getsize(path)
+    except OSError:
+        # Includes a stat that is itself refused: that is no evidence the
+        # file exists, so it must never count as a download.
+        return "missing"
+    try:
+        with open(path, "rb") as f:
+            if f.read(5) != b"%PDF-":
+                return "notpdf"
+            f.seek(max(0, size - PDF_TAIL_BYTES))
+            tail = f.read()
+    except PermissionError:
+        # stat proved it exists; only reading it is refused. An empty file
+        # needs no reading to know it isn't a PDF.
+        return "blocked" if size > 0 else "notpdf"
+    except OSError:
+        return "missing"
+    return "ok" if b"%%EOF" in tail else "truncated"
+
+
+def doi_file_names(doi):
+    """The DOI-derived filenames a download of `doi` is saved under before
+    the rename watcher gets to it: scihub_download.py replaces every
+    non-word character with "_" using Python's Unicode-aware \\w, while the
+    browser-side fallback's JS uses an ASCII-only \\w -- identical for every
+    ordinary DOI, different only for the rare non-ASCII one, so both are
+    checked."""
+    names = []
+    for pattern in (r"[^\w\-.]", r"[^A-Za-z0-9_\-.]"):
+        name = re.sub(pattern, "_", doi) + ".pdf"
+        if name not in names:
+            names.append(name)
+    return names
+
+
+def parse_issue_log(text):
+    """{doi_lower: (STATUS, detail)} from a batch page's per-folder
+    download_log.txt ("timestamp | STATUS | doi | title | detail"); the last
+    line for a DOI wins, so a later success overrides an earlier failure."""
+    statuses = {}
+    for line in text.splitlines():
+        parts = line.split(" | ")
+        if len(parts) < 3:
+            continue
+        status = parts[1].strip()
+        if status not in ("SUCCESS", "FAILED", "CORRUPT"):
+            continue
+        detail = " | ".join(parts[4:]).strip() if len(parts) > 4 else ""
+        statuses[parts[2].strip().lower()] = (status, detail)
+    return statuses
+
+
+def _note_access_problem(diag, key):
+    """Counts something this process was refused permission to read, so the
+    scan can tell the page about it instead of quietly reporting less."""
+    if diag is not None:
+        diag[key] = diag.get(key, 0) + 1
+
+
+def load_rename_index(csv_path, diag=None):
+    """Index the rename watcher's rename_log.csv as
+    {(relative_folder_lower, original_name_lower_without_" (n)"): [new_relative_path, ...]}.
+    The watcher logs paths relative to the folder holding the CSV (older rows
+    are bare filenames for top-level files), and the same DOI downloaded
+    several times yields several rows. A file this process isn't allowed to
+    read (macOS privacy gate) is noted in `diag` rather than looking empty."""
+    index = {}
+    try:
+        with open(csv_path, newline="", encoding="utf-8", errors="replace") as f:
+            for row in csv.DictReader(f):
+                old = (row.get("old_name") or "").replace("\\", "/")
+                new = (row.get("new_name") or "").replace("\\", "/")
+                if not old or not new:
+                    continue
+                rel_dir, base = os.path.split(old)
+                key = (rel_dir.lower(), _UNIQ_SUFFIX.sub("", base).lower())
+                index.setdefault(key, []).append(new)
+    except PermissionError:
+        _note_access_problem(diag, "unreadable_rename_logs")
+        return {}
+    except OSError:
+        return {}
+    return index
+
+
+def find_rename_log(folder, settings, max_up=3):
+    """The nearest rename_log.csv at or above `folder`, only looking in
+    directories that are themselves inside the allowed roots."""
+    current = os.path.realpath(folder)
+    for _ in range(max_up + 1):
+        try:
+            _validate_path(current, settings)
+        except ValueError:
+            return None
+        candidate = os.path.join(current, "rename_log.csv")
+        if os.path.isfile(candidate):
+            return candidate
+        parent = os.path.dirname(current)
+        if parent == current:
+            return None
+        current = parent
+    return None
+
+
+def scan_issue_folder(folder, dois, settings, rename_cache, diag=None):
+    """Work out, for each DOI, what's really in `folder`. Returns
+    ({doi: state}, {doi: detail}) where state is:
+      'ok'      a complete PDF is on disk (as downloaded, or renamed by the
+                watcher -- found via rename_log.csv, never by guessing at titles)
+      'partial' a file is there but cut off or not actually a PDF
+      'present' a file is there but this process isn't allowed to open it, so
+                it couldn't be checked (see pdf_integrity)
+      'logged'  the folder's download_log.txt says SUCCESS but no file is
+                there any more (moved or deleted)
+      'failed' / 'corrupt'  the log's last word was a failure (detail = why)
+    DOIs with no evidence either way are left out. The disk wins over the
+    log: a paper logged FAILED whose file is nonetheless there is 'ok'.
+
+    `diag`, if given, collects what the operating system refused to let this
+    process read ('blocked_files', 'unreadable_logs', 'unreadable_rename_logs')
+    -- when those are non-zero the states above rest on less evidence than
+    they normally would, and the caller should say so."""
+    states, details = {}, {}
+    if not os.path.isdir(folder):
+        return states, details
+
+    log_status = {}
+    try:
+        log_status = parse_issue_log(_read_capped(os.path.join(folder, "download_log.txt"), 2 * 1024 * 1024))
+    except PermissionError:
+        _note_access_problem(diag, "unreadable_logs")
+    except OSError:
+        pass
+
+    index, csv_dir, rel_dir = {}, None, ""
+    csv_path = find_rename_log(folder, settings)
+    if csv_path:
+        if csv_path not in rename_cache:
+            rename_cache[csv_path] = load_rename_index(csv_path, diag)
+        index = rename_cache[csv_path]
+        csv_dir = os.path.dirname(csv_path)
+        rel_dir = os.path.relpath(folder, csv_dir).replace("\\", "/").lower()
+        if rel_dir == ".":
+            rel_dir = ""
+
+    for doi in dois:
+        verdicts = []
+        for name in doi_file_names(doi):
+            candidates = [os.path.join(folder, name)]
+            stem = name[:-4]
+            candidates += [os.path.join(folder, f"{stem} ({n}).pdf") for n in range(1, MAX_UNIQ_VARIANTS + 1)]
+            if csv_dir:
+                candidates += [os.path.join(csv_dir, new) for new in index.get((rel_dir, name.lower()), [])]
+            for path in candidates:
+                verdict = pdf_integrity(path)
+                if verdict != "missing":
+                    verdicts.append(verdict)
+        if "ok" in verdicts:
+            states[doi] = "ok"
+        elif "blocked" in verdicts:
+            states[doi] = "present"
+            _note_access_problem(diag, "blocked_files")
+        elif verdicts:
+            states[doi] = "partial"
+        else:
+            entry = log_status.get(doi.lower())
+            if entry:
+                status, detail = entry
+                if status == "SUCCESS":
+                    states[doi] = "logged"
+                else:
+                    states[doi] = "failed" if status == "FAILED" else "corrupt"
+                    details[doi] = detail[:100]
+    return states, details
+
+
+def handle_scan_issue_downloads(message):
+    """The scan_issue_downloads action: {issues: [{folder, dois}], settings}
+    -> the reply dict. Besides the per-DOI states it reports `access`: how
+    many files the operating system wouldn't let this process read, and which
+    Python this is, so the page can say so instead of presenting a blind scan
+    as a complete one."""
+    settings = message.get("settings") or {}
+    issues = message.get("issues")
+    if not isinstance(issues, list):
+        return {"type": "result", "status": "error", "detail": "No issues to scan"}
+    total = sum(len(i.get("dois") or []) for i in issues if isinstance(i, dict))
+    if total > SCAN_MAX_DOIS:
+        return {"type": "result", "status": "error", "detail": f"Too many DOIs in one scan ({total} > {SCAN_MAX_DOIS})"}
+    states, details, skipped = {}, {}, 0
+    rename_cache = {}
+    diag = {}
+    for issue in issues:
+        if not isinstance(issue, dict) or not isinstance(issue.get("dois"), list):
+            skipped += 1
+            continue
+        try:
+            folder = _validate_path(issue.get("folder"), settings)
+        except ValueError as e:
+            debug_log(f"scan_issue_downloads: skipping folder: {e}")
+            skipped += 1
+            continue
+        dois = [d for d in issue["dois"] if isinstance(d, str) and d]
+        s_part, d_part = scan_issue_folder(folder, dois, settings, rename_cache, diag)
+        states.update(s_part)
+        details.update(d_part)
+    counts = {}
+    for v in states.values():
+        counts[v] = counts.get(v, 0) + 1
+    access = {
+        "blocked_files": diag.get("blocked_files", 0),
+        "unreadable_logs": diag.get("unreadable_logs", 0),
+        "unreadable_rename_logs": diag.get("unreadable_rename_logs", 0),
+        "python": sys.executable,
+        "python_version": platform.python_version(),
+    }
+    refused = {k: v for k, v in access.items() if k.endswith(("_files", "_logs")) and v}
+    debug_log(
+        f"scan_issue_downloads: issues={len(issues)} dois={total} found={counts} skipped={skipped} "
+        f"refused_by_os={refused or 'none'} python={access['python_version']} {access['python']}"
+    )
+    return {"type": "result", "status": "ok", "states": states, "details": details, "skipped": skipped, "access": access}
+
+
 def find_renamed_file(filepath):
     """Look up a rename for filepath via rename_log.csv, if one has happened.
 
@@ -1026,6 +1284,13 @@ def main():
                 break
 
         send_message({"type": "result", "status": "ok", "downloads": recent})
+        return
+
+    if message.get("action") == "scan_issue_downloads":
+        # "What's already downloaded?" for a list of per-issue folders -- the
+        # batch pages use it to resume an interrupted run instead of
+        # re-downloading everything. See scan_issue_folder().
+        send_message(handle_scan_issue_downloads(message))
         return
 
     if message.get("action") == "prefix_hit_rates":
